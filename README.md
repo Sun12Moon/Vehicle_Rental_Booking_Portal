@@ -1,2 +1,6 @@
-# Vehicle_Rental_Booking_Portal
-Mini project for EDI.
+Team Members :
+
+1) GODBOLE SOHAM NILESH
+2) MANDHANI SHIVAM KAMALKISHOR
+3) AHERWAL SHRAWANI AMOL
+4) GAIKWAD ISHWAR SANJAY
