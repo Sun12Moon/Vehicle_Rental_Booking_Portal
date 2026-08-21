@@ -1,10 +1,10 @@
 Project VehicleRentalPortal {
-  database_type: "PostgreSQL"
+  database_type: "MySQL"
 
   Note: '''
   Vehicle Rental Booking Portal
   Version 1.0
-  Database: PostgreSQL
+  Database: MySQL
   '''
 }
 
