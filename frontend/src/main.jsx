@@ -107,6 +107,12 @@ function Navbar() {
       <nav>
         <NavLink to="/">Home</NavLink>
         <NavLink to="/cars">Cars</NavLink>
+        {user && user.role !== "admin" && (
+          <>
+            <NavLink to="/dashboard">Dashboard</NavLink>
+            <NavLink to="/bookings">My Bookings</NavLink>
+          </>
+        )}
         <a href="/#offers">Offers</a>
         <a href="/#about">About</a>
         <a href="/#contact">Contact</a>
@@ -114,6 +120,11 @@ function Navbar() {
       <div className="nav-actions">
         {user ? (
           <>
+            {user.role === "admin" && (
+              <Link className="btn small secondary" to="/admin">
+                Admin Console
+              </Link>
+            )}
             <Link className="profile-link" to="/profile">
               Hi, {user.firstName}
             </Link>
@@ -931,19 +942,32 @@ function Auth({ register = false }) {
   const nav = useNavigate(),
     { login } = useApp(),
     [error, setError] = useState(""),
-    [resetMessage, setResetMessage] = useState("");
+    [resetMessage, setResetMessage] = useState(""),
+    [roleMode, setRoleMode] = useState("customer");
   const submit = (e) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     if (register && fd.get("password") !== fd.get("confirm"))
       return setError("Passwords do not match.");
-    login({
-      firstName: fd.get("firstName") || "Aditi",
-      lastName: fd.get("lastName") || "",
-      email: fd.get("email") || "",
-      phone: fd.get("phone") || "",
-    });
-    nav("/profile");
+    if (!register && roleMode === "admin") {
+      login({
+        firstName: fd.get("firstName") || "Admin",
+        lastName: fd.get("lastName") || "Manager",
+        email: fd.get("email") || "admin@rentivo.in",
+        phone: fd.get("phone") || "+91 99000 00000",
+        role: "admin",
+      });
+      nav("/admin");
+    } else {
+      login({
+        firstName: fd.get("firstName") || "Aditi",
+        lastName: fd.get("lastName") || "",
+        email: fd.get("email") || "",
+        phone: fd.get("phone") || "",
+        role: "customer",
+      });
+      nav("/dashboard");
+    }
   };
   return (
     <CustomerLayout>
@@ -958,13 +982,37 @@ function Auth({ register = false }) {
               ? "Start booking exceptional journeys."
               : "Sign in to manage your rentals."}
           </p>
+          {!register && (
+            <div style={{ display: "flex", gap: "8px", marginBottom: "16px", justifyContent: "center" }}>
+              <button
+                type="button"
+                className={`btn small ${roleMode === "customer" ? "" : "secondary"}`}
+                onClick={() => setRoleMode("customer")}
+              >
+                Customer Login
+              </button>
+              <button
+                type="button"
+                className={`btn small ${roleMode === "admin" ? "" : "secondary"}`}
+                onClick={() => setRoleMode("admin")}
+              >
+                Admin Login
+              </button>
+            </div>
+          )}
           {register && (
             <div className="two-col">
               <FormInput name="firstName" label="First name" required />
               <FormInput name="lastName" label="Last name" required />
             </div>
           )}
-          <FormInput name="email" label="Email address" type="email" required />
+          <FormInput
+            name="email"
+            label="Email address"
+            type="email"
+            defaultValue={!register && roleMode === "admin" ? "admin@rentivo.in" : ""}
+            required
+          />
           {register && (
             <FormInput name="phone" label="Phone number" type="tel" required />
           )}
@@ -1008,7 +1056,7 @@ function Auth({ register = false }) {
           {error && <p className="error">{error}</p>}
           {resetMessage && <p className="green">{resetMessage}</p>}
           <Button className="full">
-            {register ? "Create account" : "Login"}
+            {register ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
           </Button>
           <p className="auth-switch">
             {register ? "Already have an account? " : "New to Rentivo? "}
@@ -1303,6 +1351,11 @@ const adminNav = [
 ];
 function AdminLayout({ children }) {
   const { logout } = useApp();
+  const nav = useNavigate();
+  const handleLogout = () => {
+    logout();
+    nav("/login");
+  };
   return (
     <div className="admin-shell">
       <aside className="admin-side">
@@ -1318,7 +1371,7 @@ function AdminLayout({ children }) {
             </NavLink>
           ))}
         </nav>
-        <button onClick={logout}>
+        <button onClick={handleLogout}>
           <Icons.LogOut size={18} /> Logout
         </button>
       </aside>
@@ -2257,9 +2310,227 @@ function Settings() {
     </AdminPage>
   );
 }
+function CustomerDashboard() {
+  const { user, bookings, customers } = useApp();
+  const c =
+    customers.find((customer) => customer.email === user?.email) ||
+    (!user?.email && customers.find((customer) => customer.id === user?.id)) ||
+    user || {
+      name: "Aditi Menon",
+      email: "aditi.menon@example.com",
+    };
+
+  const customerFirstName =
+    c.firstName || user?.firstName || (c.name || "").split(" ")[0] || "Customer";
+
+  const customerBookings = useMemo(() => {
+    return bookings.filter(
+      (b) =>
+        b.customerId === user?.id ||
+        b.customerId === c?.id ||
+        (user?.email &&
+          customers
+            .find((cust) => cust.id === b.customerId)
+            ?.email?.toLowerCase() === user.email.toLowerCase()),
+    );
+  }, [bookings, user, c, customers]);
+
+  const activeOrUpcoming = useMemo(() => {
+    return (
+      customerBookings.find((b) => b.status === "Active") ||
+      customerBookings.find((b) => b.status === "Upcoming")
+    );
+  }, [customerBookings]);
+
+  const activeCount = customerBookings.filter(
+    (b) => b.status === "Active",
+  ).length;
+  const upcomingCount = customerBookings.filter(
+    (b) => b.status === "Upcoming",
+  ).length;
+  const completedCount = customerBookings.filter(
+    (b) => b.status === "Completed",
+  ).length;
+
+  const initials = (
+    c.firstName && c.lastName
+      ? `${c.firstName[0]}${c.lastName[0]}`
+      : (c.name || "AM")
+          .split(" ")
+          .map((n) => n[0])
+          .join("")
+  )
+    .slice(0, 2)
+    .toUpperCase();
+
+  return (
+    <CustomerLayout>
+      <section className="account-page">
+        <div className="account-hero">
+          <div className="avatar">{initials}</div>
+          <div>
+            <p className="eyebrow blue">CUSTOMER DASHBOARD</p>
+            <h1>Welcome back, {customerFirstName}!</h1>
+            <p>
+              Manage your active rentals, view trip history, and reserve your
+              next drive.
+            </p>
+          </div>
+          <Link className="btn" to="/cars">
+            <Icons.CarFront size={18} /> Browse cars
+          </Link>
+        </div>
+
+        <div className="metrics" style={{ marginBottom: "28px" }}>
+          <Metric
+            label="Total rentals"
+            value={customerBookings.length}
+            change="all time"
+            icon={Icons.CalendarDays}
+          />
+          <Metric
+            label="Active bookings"
+            value={activeCount}
+            change="current"
+            icon={Icons.KeyRound}
+          />
+          <Metric
+            label="Upcoming bookings"
+            value={upcomingCount}
+            change="reserved"
+            icon={Icons.Clock}
+          />
+          <Metric
+            label="Completed rentals"
+            value={completedCount}
+            change="finished"
+            icon={Icons.CircleCheck}
+          />
+        </div>
+
+        <div className="dashboard-grid">
+          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            <section className="form-card">
+              <h2>Current / Upcoming Reservation</h2>
+              {activeOrUpcoming ? (
+                <BookingRow b={activeOrUpcoming} />
+              ) : (
+                <div className="empty" style={{ padding: "24px 0" }}>
+                  <Icons.CarFront size={36} style={{ opacity: 0.5 }} />
+                  <h3>No active or upcoming reservations</h3>
+                  <p>
+                    Ready for your next journey? Explore our available fleet
+                    today.
+                  </p>
+                  <Link
+                    className="btn small"
+                    to="/cars"
+                    style={{ marginTop: "12px" }}
+                  >
+                    Explore vehicles
+                  </Link>
+                </div>
+              )}
+            </section>
+
+            <section className="table-card" style={{ padding: "20px" }}>
+              <div className="card-heading" style={{ marginBottom: "16px" }}>
+                <div>
+                  <h3>Recent rental history</h3>
+                  <p>Your recent reservations and statuses</p>
+                </div>
+                <Link to="/bookings" className="text-link">
+                  View all bookings <Icons.ArrowRight size={15} />
+                </Link>
+              </div>
+              {customerBookings.length ? (
+                customerBookings
+                  .slice(0, 3)
+                  .map((b) => <BookingRow b={b} key={b.id} />)
+              ) : (
+                <EmptyState
+                  title="No booking history yet"
+                  text="When you reserve a car, your bookings will appear here."
+                />
+              )}
+            </section>
+          </div>
+
+          <aside style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            <section className="booking-panel">
+              <h3>Quick actions</h3>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                  marginTop: "12px",
+                }}
+              >
+                <Link className="btn secondary full" to="/cars">
+                  <Icons.Search size={16} /> Browse cars
+                </Link>
+                <Link className="btn secondary full" to="/bookings">
+                  <Icons.CalendarDays size={16} /> My bookings
+                </Link>
+                <Link className="btn secondary full" to="/profile">
+                  <Icons.User size={16} /> Edit profile
+                </Link>
+              </div>
+            </section>
+
+            <section className="booking-panel">
+              <h3>Account summary</h3>
+              <div
+                className="info-list"
+                style={{ marginTop: "12px", fontSize: "14px" }}
+              >
+                <p>
+                  <span>Name</span>
+                  <b>{c.name || `${c.firstName || ""} ${c.lastName || ""}`}</b>
+                </p>
+                <p>
+                  <span>Email</span>
+                  <b>{c.email || user?.email || "N/A"}</b>
+                </p>
+                <p>
+                  <span>Phone</span>
+                  <b>{c.phone || "+91 98452 18203"}</b>
+                </p>
+                <p>
+                  <span>Licence</span>
+                  <b>{c.licence || "KA01 20150012345"}</b>
+                </p>
+              </div>
+              <Link
+                className="text-link"
+                to="/profile"
+                style={{ marginTop: "12px", display: "inline-block" }}
+              >
+                Manage account <Icons.ArrowRight size={14} />
+              </Link>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </CustomerLayout>
+  );
+}
 function RequireCustomer({ children }) {
   const { user } = useApp();
-  return user ? children : <Navigate to="/login" replace />;
+  return user && (user.role === "customer" || user.role === "admin") ? (
+    children
+  ) : (
+    <Navigate to="/login" replace />
+  );
+}
+function RequireAdmin({ children }) {
+  const { user } = useApp();
+  return user && user.role === "admin" ? (
+    children
+  ) : (
+    <Navigate to="/login" replace />
+  );
 }
 function App() {
   return (
@@ -2274,6 +2545,14 @@ function App() {
           <Route path="/booking-confirmation" element={<Confirmation />} />
           <Route path="/login" element={<Auth />} />
           <Route path="/register" element={<Auth register />} />
+          <Route
+            path="/dashboard"
+            element={
+              <RequireCustomer>
+                <CustomerDashboard />
+              </RequireCustomer>
+            }
+          />
           <Route
             path="/profile"
             element={
@@ -2298,28 +2577,86 @@ function App() {
               </RequireCustomer>
             }
           />
-          <Route path="/admin" element={<AdminDashboard />} />
+          <Route
+            path="/admin"
+            element={
+              <RequireAdmin>
+                <AdminDashboard />
+              </RequireAdmin>
+            }
+          />
           <Route
             path="/admin/vehicles"
-            element={<CrudPage type="Vehicles" />}
+            element={
+              <RequireAdmin>
+                <CrudPage type="Vehicles" />
+              </RequireAdmin>
+            }
           />
           <Route
             path="/admin/categories"
-            element={<CrudPage type="Categories" />}
+            element={
+              <RequireAdmin>
+                <CrudPage type="Categories" />
+              </RequireAdmin>
+            }
           />
           <Route
             path="/admin/branches"
-            element={<CrudPage type="Branches" />}
+            element={
+              <RequireAdmin>
+                <CrudPage type="Branches" />
+              </RequireAdmin>
+            }
           />
           <Route
             path="/admin/customers"
-            element={<CrudPage type="Customers" />}
+            element={
+              <RequireAdmin>
+                <CrudPage type="Customers" />
+              </RequireAdmin>
+            }
           />
-          <Route path="/admin/bookings" element={<AdminBookings />} />
-          <Route path="/admin/payments" element={<Payments />} />
-          <Route path="/admin/maintenance" element={<Maintenance />} />
-          <Route path="/admin/reports" element={<Reports />} />
-          <Route path="/admin/settings" element={<Settings />} />
+          <Route
+            path="/admin/bookings"
+            element={
+              <RequireAdmin>
+                <AdminBookings />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/payments"
+            element={
+              <RequireAdmin>
+                <Payments />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/maintenance"
+            element={
+              <RequireAdmin>
+                <Maintenance />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/reports"
+            element={
+              <RequireAdmin>
+                <Reports />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <RequireAdmin>
+                <Settings />
+              </RequireAdmin>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

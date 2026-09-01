@@ -50,7 +50,9 @@ const hydrateState = (rawState) => {
   if (!isObject(rawState)) return initialState;
 
   return {
-    user: isObject(rawState.user) ? rawState.user : null,
+    user: isObject(rawState.user)
+      ? { role: "customer", ...rawState.user }
+      : null,
     vehicles: hydrateArray(rawState.vehicles, seedVehicles),
     categories: hydrateArray(rawState.categories, seedCategories),
     branches: hydrateArray(rawState.branches, seedBranches),
