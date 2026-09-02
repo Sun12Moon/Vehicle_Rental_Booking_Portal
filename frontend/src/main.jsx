@@ -105,7 +105,9 @@ function Navbar() {
         <span>R</span> Rentivo
       </Link>
       <nav>
-        <NavLink to="/">Home</NavLink>
+        <NavLink end to="/">
+          Home
+        </NavLink>
         <NavLink to="/cars">Cars</NavLink>
         {user && user.role !== "admin" && (
           <>
