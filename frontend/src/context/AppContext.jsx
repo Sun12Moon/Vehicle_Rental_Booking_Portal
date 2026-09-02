@@ -15,6 +15,8 @@ import {
   vehicles as seedVehicles,
 } from "../data/mockData";
 
+export const DEMO_ADMIN_EMAIL = "admin@rentivo.in";
+
 const STORAGE_KEY = "rentivo-app-state-v1";
 
 const seedSettings = {
@@ -147,6 +149,9 @@ export function AppProvider({ children }) {
       };
 
       if (user.role === "admin") {
+        if (normalizedEmail !== DEMO_ADMIN_EMAIL.toLowerCase()) {
+          return previous;
+        }
         return {
           ...previous,
           user,

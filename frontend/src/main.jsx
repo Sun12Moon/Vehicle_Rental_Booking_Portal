@@ -15,7 +15,7 @@ import {
   useParams,
 } from "react-router-dom";
 import * as Icons from "lucide-react";
-import { AppProvider, useApp } from "./context/AppContext";
+import { AppProvider, useApp, DEMO_ADMIN_EMAIL } from "./context/AppContext";
 import "./styles.css";
 const INR = (n) =>
   new Intl.NumberFormat("en-IN", {
@@ -943,24 +943,44 @@ function Auth({ register = false }) {
     { login } = useApp(),
     [error, setError] = useState(""),
     [resetMessage, setResetMessage] = useState(""),
-    [roleMode, setRoleMode] = useState("customer");
+    [roleMode, setRoleMode] = useState("customer"),
+    [email, setEmail] = useState("");
+
+  const handleRoleSwitch = (mode) => {
+    setRoleMode(mode);
+    setError("");
+    if (mode === "admin") {
+      setEmail(DEMO_ADMIN_EMAIL);
+    } else {
+      setEmail("");
+    }
+  };
+
   const submit = (e) => {
     e.preventDefault();
+    setError("");
     const fd = new FormData(e.currentTarget);
+    const emailInput = String(fd.get("email") || "").trim().toLowerCase();
+
     if (register && fd.get("password") !== fd.get("confirm"))
       return setError("Passwords do not match.");
+
     if (!register && roleMode === "admin") {
+      if (emailInput !== DEMO_ADMIN_EMAIL.toLowerCase()) {
+        setError("Unauthorized admin account.");
+        return;
+      }
       login({
         firstName: fd.get("firstName") || "Admin",
         lastName: fd.get("lastName") || "Manager",
-        email: fd.get("email") || "admin@rentivo.in",
+        email: emailInput,
         phone: fd.get("phone") || "+91 99000 00000",
         role: "admin",
       });
       nav("/admin");
     } else if (!register) {
       login({
-        email: fd.get("email") || "",
+        email: emailInput,
         role: "customer",
       });
       nav("/dashboard");
@@ -968,7 +988,7 @@ function Auth({ register = false }) {
       login({
         firstName: fd.get("firstName") || "",
         lastName: fd.get("lastName") || "",
-        email: fd.get("email") || "",
+        email: emailInput,
         phone: fd.get("phone") || "",
         role: "customer",
       });
@@ -993,14 +1013,14 @@ function Auth({ register = false }) {
               <button
                 type="button"
                 className={`btn small ${roleMode === "customer" ? "" : "secondary"}`}
-                onClick={() => setRoleMode("customer")}
+                onClick={() => handleRoleSwitch("customer")}
               >
                 Customer Login
               </button>
               <button
                 type="button"
                 className={`btn small ${roleMode === "admin" ? "" : "secondary"}`}
-                onClick={() => setRoleMode("admin")}
+                onClick={() => handleRoleSwitch("admin")}
               >
                 Admin Login
               </button>
@@ -1016,7 +1036,8 @@ function Auth({ register = false }) {
             name="email"
             label="Email address"
             type="email"
-            defaultValue={!register && roleMode === "admin" ? "admin@rentivo.in" : ""}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             required
           />
           {register && (
