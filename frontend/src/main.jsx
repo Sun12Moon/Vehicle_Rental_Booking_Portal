@@ -958,9 +958,15 @@ function Auth({ register = false }) {
         role: "admin",
       });
       nav("/admin");
+    } else if (!register) {
+      login({
+        email: fd.get("email") || "",
+        role: "customer",
+      });
+      nav("/dashboard");
     } else {
       login({
-        firstName: fd.get("firstName") || "Aditi",
+        firstName: fd.get("firstName") || "",
         lastName: fd.get("lastName") || "",
         email: fd.get("email") || "",
         phone: fd.get("phone") || "",
@@ -1074,25 +1080,35 @@ function Profile() {
   const [edit, setEdit] = useState(false),
     [message, setMessage] = useState("");
   const c =
-    customers.find((customer) => customer.email === user?.email) ||
-    (!user?.email && customers.find((customer) => customer.id === user?.id)) ||
-    user || {
-      name: "Aditi Menon",
-      email: "aditi.menon@example.com",
-      phone: "+91 98452 18203",
-    };
-  const [profileFirstName = "Aditi", ...profileLastName] = (c.name || "").split(
-    " ",
-  );
+    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
+    customers.find((customer) => customer.id === user?.id) ||
+    user ||
+    null;
+
+  const displayName = c?.name || user?.name || [c?.firstName || user?.firstName, c?.lastName || user?.lastName].filter(Boolean).join(" ") || "Customer";
+  const displayEmail = c?.email || user?.email || "";
+  const displayPhone = c?.phone || user?.phone || "";
+
+  const [calcFirstName = "", ...calcLastName] = (displayName || "").split(" ");
+  const firstNameVal = c?.firstName || user?.firstName || calcFirstName;
+  const lastNameVal = c?.lastName || user?.lastName || calcLastName.join(" ");
+
+  const avatarInitials = (
+    (firstNameVal && lastNameVal ? `${firstNameVal[0]}${lastNameVal[0]}` : null) ||
+    (displayName ? displayName.split(" ").map((n) => n[0]).join("") : "C")
+  )
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <CustomerLayout>
       <section className="account-page">
         <div className="account-hero">
-          <div className="avatar">AM</div>
+          <div className="avatar">{avatarInitials}</div>
           <div>
             <p className="eyebrow blue">MY ACCOUNT</p>
-            <h1>{c.name}</h1>
-            <p>{c.email}</p>
+            <h1>{displayName}</h1>
+            <p>{displayEmail}</p>
           </div>
           <Button variant="secondary" onClick={() => setEdit(!edit)}>
             <Icons.Pencil size={16} /> {edit ? "Done editing" : "Edit profile"}
@@ -1126,18 +1142,18 @@ function Profile() {
               <FormInput
                 label="First name"
                 name="firstName"
-                defaultValue={c.firstName || profileFirstName}
+                defaultValue={firstNameVal}
                 disabled={!edit}
               />
               <FormInput
                 label="Last name"
                 name="lastName"
-                defaultValue={c.lastName || profileLastName.join(" ")}
+                defaultValue={lastNameVal}
                 disabled={!edit}
               />
             </div>
-            <FormInput label="Email" name="email" defaultValue={c.email} disabled={!edit} />
-            <FormInput label="Phone" name="phone" defaultValue={c.phone} disabled={!edit} />
+            <FormInput label="Email" name="email" defaultValue={displayEmail} disabled={!edit} />
+            <FormInput label="Phone" name="phone" defaultValue={displayPhone} disabled={!edit} />
             <h3>Identity & licence</h3>
             <div className="two-col">
               <FormInput
@@ -1381,7 +1397,10 @@ function AdminLayout({ children }) {
             <p>Operations workspace</p>
             <h3>Good morning, Admin</h3>
           </div>
-          <div className="admin-user">
+          <div className="admin-user" style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+            <Link to="/" className="text-link" style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
+              <Icons.ExternalLink size={15} /> View Customer Site
+            </Link>
             <Icons.Bell size={19} />
             <span>RM</span>
           </div>
@@ -1423,7 +1442,39 @@ function Metric({ label, value, change, icon: I }) {
   );
 }
 function AdminDashboard() {
-  const { bookings } = useApp();
+  const { vehicles, customers, bookings, payments } = useApp();
+
+  const totalVehicles = vehicles.length;
+  const availableVehicles = vehicles.filter((v) => v.status === "Available").length;
+  const rentedVehicles = vehicles.filter((v) => v.status === "Rented").length;
+  const maintenanceVehicles = vehicles.filter((v) => v.status === "Maintenance").length;
+
+  const activeCustomersCount = customers.filter((c) => c.status === "Active").length;
+
+  const paidBookingsTotal = bookings
+    .filter((b) => b.paymentStatus === "Paid" || b.status === "Completed")
+    .reduce((sum, b) => sum + Number(b.total || 0), 0);
+
+  const capturedPaymentsTotal = payments
+    .filter((p) => p.status === "Captured" || p.status === "Paid")
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+  const totalRevenue = Math.max(paidBookingsTotal, capturedPaymentsTotal);
+
+  const utilizationPercent = totalVehicles
+    ? Math.round((rentedVehicles / totalVehicles) * 100)
+    : 0;
+
+  const recentBookings = useMemo(() => {
+    return [...bookings]
+      .sort((a, b) => {
+        const timeA = new Date(a.pickupDate || 0).getTime();
+        const timeB = new Date(b.pickupDate || 0).getTime();
+        return timeB - timeA;
+      })
+      .slice(0, 3);
+  }, [bookings]);
+
   return (
     <AdminPage
       title="Dashboard"
@@ -1432,32 +1483,32 @@ function AdminDashboard() {
       <div className="metrics">
         <Metric
           label="Total vehicles"
-          value="41"
-          change="8%"
+          value={totalVehicles}
+          change="fleet count"
           icon={Icons.CarFront}
         />
         <Metric
           label="Available vehicles"
-          value="28"
-          change="12%"
+          value={availableVehicles}
+          change="ready to rent"
           icon={Icons.CircleCheck}
         />
         <Metric
           label="Currently rented"
-          value="10"
-          change="5%"
+          value={rentedVehicles}
+          change="active rentals"
           icon={Icons.KeyRound}
         />
         <Metric
           label="Total revenue"
-          value="₹4.86L"
-          change="18%"
+          value={INR(totalRevenue)}
+          change="collections"
           icon={Icons.IndianRupee}
         />
         <Metric
           label="Active customers"
-          value="1,284"
-          change="9%"
+          value={activeCustomersCount}
+          change="active status"
           icon={Icons.Users}
         />
       </div>
@@ -1492,22 +1543,22 @@ function AdminDashboard() {
           </div>
           <div className="donut">
             <div>
-              <b>68%</b>
+              <b>{utilizationPercent}%</b>
               <small>utilized</small>
             </div>
           </div>
           <div className="legend">
             <span>
               <i className="blue-dot" />
-              Rented 10
+              Rented {rentedVehicles}
             </span>
             <span>
               <i className="cyan-dot" />
-              Available 28
+              Available {availableVehicles}
             </span>
             <span>
               <i className="gray-dot" />
-              Service 3
+              Service {maintenanceVehicles}
             </span>
           </div>
         </section>
@@ -1523,9 +1574,13 @@ function AdminDashboard() {
               View all
             </Link>
           </div>
-          {bookings.slice(0, 3).map((b) => (
-            <BookingRow admin b={b} key={b.id} />
-          ))}
+          {recentBookings.length ? (
+            recentBookings.map((b) => (
+              <BookingRow admin b={b} key={b.id} />
+            ))
+          ) : (
+            <EmptyState title="No recent bookings" text="No customer reservations recorded yet." />
+          )}
         </section>
         <section className="quick">
           <h3>Quick actions</h3>
@@ -1540,6 +1595,9 @@ function AdminDashboard() {
           </Link>
           <Link to="/admin/reports">
             <Icons.FileBarChart /> Export report
+          </Link>
+          <Link to="/">
+            <Icons.ExternalLink /> View Customer Site
           </Link>
         </section>
       </div>
@@ -2313,15 +2371,12 @@ function Settings() {
 function CustomerDashboard() {
   const { user, bookings, customers } = useApp();
   const c =
-    customers.find((customer) => customer.email === user?.email) ||
-    (!user?.email && customers.find((customer) => customer.id === user?.id)) ||
-    user || {
-      name: "Aditi Menon",
-      email: "aditi.menon@example.com",
-    };
+    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
+    customers.find((customer) => customer.id === user?.id) ||
+    user || null;
 
   const customerFirstName =
-    c.firstName || user?.firstName || (c.name || "").split(" ")[0] || "Customer";
+    user?.firstName || c?.firstName || (c?.name || user?.name || "").split(" ")[0] || "Customer";
 
   const customerBookings = useMemo(() => {
     return bookings.filter(
@@ -2353,12 +2408,12 @@ function CustomerDashboard() {
   ).length;
 
   const initials = (
-    c.firstName && c.lastName
-      ? `${c.firstName[0]}${c.lastName[0]}`
-      : (c.name || "AM")
-          .split(" ")
-          .map((n) => n[0])
-          .join("")
+    (user?.firstName && user?.lastName ? `${user.firstName[0]}${user.lastName[0]}` : null) ||
+    (c?.firstName && c?.lastName ? `${c.firstName[0]}${c.lastName[0]}` : null) ||
+    (c?.name || user?.name || "Customer")
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
   )
     .slice(0, 2)
     .toUpperCase();
@@ -2487,19 +2542,26 @@ function CustomerDashboard() {
               >
                 <p>
                   <span>Name</span>
-                  <b>{c.name || `${c.firstName || ""} ${c.lastName || ""}`}</b>
+                  <b>
+                    {c?.name ||
+                      user?.name ||
+                      [c?.firstName || user?.firstName, c?.lastName || user?.lastName]
+                        .filter(Boolean)
+                        .join(" ") ||
+                      "Not provided"}
+                  </b>
                 </p>
                 <p>
                   <span>Email</span>
-                  <b>{c.email || user?.email || "N/A"}</b>
+                  <b>{c?.email || user?.email || "Not provided"}</b>
                 </p>
                 <p>
                   <span>Phone</span>
-                  <b>{c.phone || "+91 98452 18203"}</b>
+                  <b>{c?.phone || user?.phone || "Not provided"}</b>
                 </p>
                 <p>
                   <span>Licence</span>
-                  <b>{c.licence || "KA01 20150012345"}</b>
+                  <b>{c?.licence || user?.licence || "Not provided"}</b>
                 </p>
               </div>
               <Link

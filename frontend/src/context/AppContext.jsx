@@ -102,30 +102,94 @@ export function AppProvider({ children }) {
     setState((previous) => {
       const normalizedEmail = String(payload.email || "").toLowerCase();
       const matchedCustomer = previous.customers.find(
-        (customer) => customer.email.toLowerCase() === normalizedEmail,
+        (customer) => customer.email?.toLowerCase() === normalizedEmail,
       );
-      const matchedName = matchedCustomer?.name || "";
+
       const fallbackName = [payload.firstName, payload.lastName]
         .filter(Boolean)
         .join(" ")
         .trim();
-      const name = fallbackName || matchedName || "Aditi Menon";
-      const [firstName = "Aditi", ...restName] = name.split(" ");
+      const derivedName = normalizedEmail ? normalizedEmail.split("@")[0] : "Customer";
+      const name =
+        fallbackName ||
+        matchedCustomer?.name ||
+        derivedName;
+
+      const [defaultFirst = name, ...defaultRest] = name.split(" ");
+      const firstName =
+        payload.firstName ||
+        matchedCustomer?.firstName ||
+        (matchedCustomer?.name ? matchedCustomer.name.split(" ")[0] : defaultFirst);
+      const lastName =
+        payload.lastName ||
+        matchedCustomer?.lastName ||
+        (matchedCustomer?.name ? matchedCustomer.name.split(" ").slice(1).join(" ") : defaultRest.join(" "));
+
+      const customerId =
+        payload.id ||
+        matchedCustomer?.id ||
+        (normalizedEmail
+          ? `user-${normalizedEmail.replace(/[^a-z0-9]/g, "-")}`
+          : `user-${Date.now()}`);
+
+      const user = {
+        id: customerId,
+        role: payload.role || matchedCustomer?.role || "customer",
+        name: `${firstName} ${lastName}`.trim() || name,
+        firstName,
+        lastName,
+        email: payload.email || matchedCustomer?.email || "",
+        phone: payload.phone || matchedCustomer?.phone || "",
+        licence: payload.licence || matchedCustomer?.licence || "",
+        aadhaar: payload.aadhaar || matchedCustomer?.aadhaar || "",
+        address: payload.address || matchedCustomer?.address || "",
+        emergencyContact: payload.emergencyContact || matchedCustomer?.emergencyContact || "",
+      };
+
+      if (user.role === "admin") {
+        return {
+          ...previous,
+          user,
+        };
+      }
+
+      const customerRecord = {
+        id: user.id,
+        name: user.name,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        licence: user.licence,
+        aadhaar: user.aadhaar,
+        address: user.address,
+        emergencyContact: user.emergencyContact,
+        status: matchedCustomer?.status || "Active",
+        joined:
+          matchedCustomer?.joined ||
+          new Date().toLocaleDateString("en-IN", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+          }),
+      };
+
+      const hasCustomer = previous.customers.some(
+        (c) => c.id === user.id || (user.email && c.email?.toLowerCase() === user.email.toLowerCase()),
+      );
+
+      const nextCustomers = hasCustomer
+        ? previous.customers.map((c) =>
+            c.id === user.id || (user.email && c.email?.toLowerCase() === user.email.toLowerCase())
+              ? { ...c, ...customerRecord }
+              : c,
+          )
+        : [...previous.customers, customerRecord];
 
       return {
         ...previous,
-        user: {
-          id:
-            payload.id ||
-            matchedCustomer?.id ||
-            `user-${normalizedEmail.replace(/[^a-z0-9]/g, "-") || "guest"}`,
-          role: payload.role || "customer",
-          name,
-          firstName: payload.firstName || firstName,
-          lastName: payload.lastName || restName.join(" "),
-          email: payload.email || matchedCustomer?.email || "",
-          phone: payload.phone || matchedCustomer?.phone || "",
-        },
+        user,
+        customers: nextCustomers,
       };
     });
   };
