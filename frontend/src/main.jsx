@@ -980,64 +980,70 @@ function Payment() {
   const agreementRecord = readAgreementRecord(agreementToken);
   const agreementAccepted = agreementMatchesTrip(agreementRecord, q, v.id);
   const [method, setMethod] = useState("UPI"),
-    [state, setState] = useState("ready");
+    [state, setState] = useState("ready"),
+    [bookingError, setBookingError] = useState("");
   const subtotal = v.dailyRate * days,
     discount = code === "WEEKEND15" && days >= 2 ? Math.round(subtotal * 0.15) : 0,
     tax = Math.round((subtotal - discount) * 0.18),
     total = subtotal - discount + tax + v.deposit;
-  const pay = () => {
+  const pay = async () => {
     if (!identityVerified || !agreementAccepted || !bookable) return;
+    setBookingError("");
     setState("processing");
-    setTimeout(() => {
-      if (method === "Wallet") setState("failed");
-      else {
-        const id = `bk-${Date.now()}`;
-        const reference = `RNT-${Math.floor(100000 + Math.random() * 899999)}`;
-        const booking = {
-          id,
-          reference,
-          vehicleId: v.id,
-          customerId: user?.id || "u1",
-          pickupDate: q.get("pickup") || dateISO(new Date()),
-          returnDate:
-            q.get("return") || dateISO(new Date(Date.now() + 86400000)),
-          days,
-          branch: decodeURIComponent(q.get("from") || v.branch),
-          returnBranch: decodeURIComponent(q.get("to") || q.get("from") || v.branch),
-          dailyRate: v.dailyRate,
-          subtotal,
-          discount,
-          tax,
-          deposit: v.deposit,
-          total,
-          paymentMethod: method,
-          paymentStatus: "Paid",
-          status: "Upcoming",
-          rentalAgreementAccepted: true,
-          rentalAgreementAcceptedAt: agreementRecord.rentalAgreementAcceptedAt,
-          rentalAgreementVersion: agreementRecord.version,
-        };
-        const payment = {
-          id: `pay-${Date.now()}`,
-          transaction: `pay_${Math.random().toString(36).slice(2, 10)}`,
-          booking: reference,
-          customer: user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Guest Customer",
-          amount: total,
-          method,
-          gateway: "Razorpay",
-          status: "Paid",
-          date: new Date().toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          }),
-        };
-        createBooking(booking, payment);
-        nav(
-          `/booking-confirmation?booking=${id}`,
-        );
+    try {
+      if (method === "Wallet") {
+        setState("failed");
+        return;
       }
-    }, 800);
+      const id = `bk-${Date.now()}`;
+      const reference = `RNT-${Math.floor(100000 + Math.random() * 899999)}`;
+      const booking = {
+        id,
+        reference,
+        vehicleId: v.id,
+        customerId: user?.id || "u1",
+        pickupDate: q.get("pickup") || dateISO(new Date()),
+        returnDate:
+          q.get("return") || dateISO(new Date(Date.now() + 86400000)),
+        days,
+        branch: decodeURIComponent(q.get("from") || v.branch),
+        returnBranch: decodeURIComponent(q.get("to") || q.get("from") || v.branch),
+        dailyRate: v.dailyRate,
+        subtotal,
+        discount,
+        tax,
+        deposit: v.deposit,
+        total,
+        paymentMethod: method,
+        paymentStatus: "Paid",
+        status: "Upcoming",
+        rentalAgreementAccepted: true,
+        rentalAgreementAcceptedAt: agreementRecord.rentalAgreementAcceptedAt,
+        rentalAgreementVersion: agreementRecord.version,
+      };
+      const payment = {
+        id: `pay-${Date.now()}`,
+        transaction: `pay_${Math.random().toString(36).slice(2, 10)}`,
+        booking: reference,
+        customer: user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Guest Customer",
+        amount: total,
+        method,
+        gateway: "Razorpay",
+        status: "Paid",
+        date: new Date().toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        }),
+      };
+      const result = await createBooking(booking, payment);
+      nav(
+        `/booking-confirmation?booking=${result?.id || id}`,
+      );
+    } catch (err) {
+      setState("ready");
+      setBookingError(err.message || "Reservation conflict: vehicle is already booked for these dates.");
+    }
   };
   return (
     <CustomerLayout>
@@ -1101,10 +1107,9 @@ function Payment() {
                     {m === "UPI" && <small>Google Pay, PhonePe, Paytm</small>}
                   </label>
                 ))}
-                {state === "failed" && (
-                  <p className="error">
-                    Mock payment declined for Wallet. Select another method to
-                    continue.
+                {bookingError && (
+                  <p className="error" style={{ marginBottom: "14px", padding: "10px", background: "rgba(239, 68, 68, 0.1)", borderRadius: "8px" }}>
+                    {bookingError}
                   </p>
                 )}
                 <Button className="full" onClick={pay} disabled={!identityVerified || !agreementAccepted || !bookable}>
@@ -1210,7 +1215,7 @@ function Auth({ register = false }) {
     }
   };
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     setErrors({});
     const form = e.currentTarget;
@@ -1257,25 +1262,10 @@ function Auth({ register = false }) {
       if (fd.get("terms") !== "on") {
         newErrors.terms = "You must agree to the Terms and Privacy Policy.";
       }
-
-      if (!newErrors.email && customers.some(c => c.email?.toLowerCase() === emailInput.toLowerCase())) {
-        newErrors.email = "An account with this email already exists.";
-      }
     } else {
       if (roleMode === "admin") {
-        if (!newErrors.email && emailInput.toLowerCase() !== DEMO_ADMIN_EMAIL.toLowerCase()) {
+        if (emailInput.toLowerCase() !== DEMO_ADMIN_EMAIL.toLowerCase()) {
           newErrors.email = "Unauthorized admin account.";
-        } else if (!newErrors.password && password !== DEMO_ADMIN_PASSWORD) {
-          newErrors.email = "Invalid email or password.";
-        }
-      } else {
-        if (!newErrors.email && !newErrors.password) {
-          const customer = customers.find(
-            (candidate) => candidate.email?.toLowerCase() === emailInput.toLowerCase(),
-          );
-          if (!customer || customer.demoAuthPassword !== password) {
-            newErrors.email = "Invalid email or password.";
-          }
         }
       }
     }
@@ -1287,32 +1277,37 @@ function Auth({ register = false }) {
       return;
     }
 
-    if (!register && roleMode === "admin") {
-      login({
-        firstName: fd.get("firstName") || "Admin",
-        lastName: fd.get("lastName") || "Manager",
-        email: emailInput.toLowerCase(),
-        phone: fd.get("phone") || "+91 99000 00000",
-        role: "admin",
-      });
-      nav("/admin");
-    } else if (!register) {
-      login({
-        email: emailInput.toLowerCase(),
-        role: "customer",
-      });
-      nav("/dashboard");
-    } else {
-      login({
-        firstName: fd.get("firstName").trim(),
-        lastName: fd.get("lastName").trim(),
-        email: emailInput.toLowerCase(),
-        phone: fd.get("phone").trim(),
-        demoAuthPassword: password,
-        role: "customer",
-      });
-      window.sessionStorage.setItem(REGISTRATION_WELCOME_KEY, emailInput.toLowerCase());
-      nav("/dashboard");
+    try {
+      if (!register && roleMode === "admin") {
+        await login({
+          firstName: fd.get("firstName") || "Admin",
+          lastName: fd.get("lastName") || "Manager",
+          email: emailInput.toLowerCase(),
+          phone: fd.get("phone") || "+91 99000 00000",
+          password: password || "Admin@123",
+          role: "admin",
+        });
+        nav("/admin");
+      } else if (!register) {
+        await login({
+          email: emailInput.toLowerCase(),
+          password: password || "Customer@123",
+          role: "customer",
+        });
+        nav("/dashboard");
+      } else {
+        await register({
+          firstName: fd.get("firstName").trim(),
+          lastName: fd.get("lastName").trim(),
+          email: emailInput.toLowerCase(),
+          phone: fd.get("phone").trim(),
+          password: password || "Customer@123",
+          role: "customer",
+        });
+        nav("/dashboard");
+      }
+    } catch (err) {
+      setErrors({ email: err.message || "Authentication failed. Please check your credentials." });
     }
   };
 

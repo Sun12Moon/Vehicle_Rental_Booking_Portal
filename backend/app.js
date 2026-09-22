@@ -1,30 +1,33 @@
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const routes = require('./src/routes');
+const { errorHandler } = require('./src/middlewares/errorHandler');
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// Middlewares
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
 
-// Routes
-app.get('/api/v1/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Vehicle Rental Booking Portal API is running.'
+// API Routes
+app.use('/api/v1', routes);
+
+// 404 Route handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API endpoint ${req.method} ${req.originalUrl} not found.`
   });
 });
 
 // Centralized Error Handling Middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal Server Error'
-  });
-});
+app.use(errorHandler);
 
 module.exports = app;

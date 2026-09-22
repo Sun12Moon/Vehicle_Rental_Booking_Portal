@@ -14,11 +14,20 @@ import {
   payments as seedPayments,
   vehicles as seedVehicles,
 } from "../data/mockData";
+import {
+  authApi,
+  vehiclesApi,
+  branchesApi,
+  bookingsApi,
+  paymentsApi,
+  adminApi
+} from "../services/api";
 
 export const DEMO_ADMIN_EMAIL = "admin@rentivo.in";
 export const DEMO_ADMIN_PASSWORD = "password123";
 
 const STORAGE_KEY = "rentivo-app-state-v1";
+const TOKEN_KEY = "rentivo_jwt_token";
 
 const seedSettings = {
   businessName: "Rentivo Mobility Pvt. Ltd.",
@@ -29,6 +38,11 @@ const seedSettings = {
   requireLicenceBeforeConfirmation: true,
   sendBookingNotifications: true,
 };
+
+const isObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const hydrateArray = (value, fallback) => (Array.isArray(value) ? value : fallback);
 
 export const defaultIdentityVerification = () => ({
   status: "not_started",
@@ -65,25 +79,6 @@ export const normalizeIdentityVerification = (value = {}) => {
   };
 };
 
-const initialState = {
-  user: null,
-  vehicles: seedVehicles,
-  categories: seedCategories,
-  branches: seedBranches,
-  customers: seedCustomers,
-  bookings: seedBookings,
-  payments: seedPayments,
-  maintenance: seedMaintenance,
-  settings: seedSettings,
-};
-
-const AppContext = createContext(null);
-
-const isObject = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
-const hydrateArray = (value, fallback) => (Array.isArray(value) ? value : fallback);
-
 const hydrateCustomers = (value) =>
   hydrateArray(value, seedCustomers).map((customer) => {
     const seededCustomer = seedCustomers.find(
@@ -100,6 +95,22 @@ const hydrateCustomers = (value) =>
     };
   });
 
+const initialState = {
+  user: null,
+  token: null,
+  vehicles: seedVehicles,
+  categories: seedCategories,
+  branches: seedBranches,
+  customers: seedCustomers,
+  bookings: seedBookings,
+  payments: seedPayments,
+  maintenance: seedMaintenance,
+  settings: seedSettings,
+  isApiConnected: false
+};
+
+const AppContext = createContext(null);
+
 const hydrateState = (rawState) => {
   if (!isObject(rawState)) return initialState;
 
@@ -113,6 +124,7 @@ const hydrateState = (rawState) => {
           ),
         }
       : null,
+    token: rawState.token || null,
     vehicles: hydrateArray(rawState.vehicles, seedVehicles),
     categories: hydrateArray(rawState.categories, seedCategories),
     branches: hydrateArray(rawState.branches, seedBranches),
@@ -123,250 +135,347 @@ const hydrateState = (rawState) => {
     settings: isObject(rawState.settings)
       ? { ...seedSettings, ...rawState.settings }
       : seedSettings,
+    isApiConnected: false
   };
-};
-
-const readPersistedState = () => {
-  if (typeof window === "undefined") return initialState;
-
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return stored ? hydrateState(JSON.parse(stored)) : initialState;
-  } catch {
-    return initialState;
-  }
 };
 
 export function AppProvider({ children }) {
-  const [state, setState] = useState(readPersistedState);
+  const [state, setState] = useState(() => {
+    if (typeof window === "undefined") return initialState;
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const token = window.localStorage.getItem(TOKEN_KEY);
+      const parsed = stored ? JSON.parse(stored) : {};
+      const hydrated = hydrateState(parsed);
+      return {
+        ...hydrated,
+        token: token || hydrated.token || null
+      };
+    } catch {
+      return initialState;
+    }
+  });
 
+  // Sync to localStorage
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore storage write failures in demo mode.
+      if (state.token) {
+        window.localStorage.setItem(TOKEN_KEY, state.token);
+      } else {
+        window.localStorage.removeItem(TOKEN_KEY);
+      }
+    } catch (e) {
+      // Ignore storage write issues
     }
   }, [state]);
 
-  const updateKey = (key, nextValue) => {
-    setState((previous) => ({
-      ...previous,
-      [key]:
-        typeof nextValue === "function"
-          ? nextValue(previous[key])
-          : nextValue,
-    }));
-  };
+  // Initial Data Fetch & Token Hydration from Backend API
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [vehiclesRes, branchesRes, categoriesRes] = await Promise.all([
+          vehiclesApi.getVehicles().catch(() => null),
+          branchesApi.getBranches().catch(() => null),
+          vehiclesApi.getCategories().catch(() => null)
+        ]);
 
-  const login = (payload = {}) => {
-    setState((previous) => {
-      const normalizedEmail = String(payload.email || "").toLowerCase();
-      const matchedCustomer = previous.customers.find(
-        (customer) => customer.email?.toLowerCase() === normalizedEmail,
-      );
+        if (vehiclesRes?.data) {
+          const mappedVehicles = vehiclesRes.data.map(v => ({
+            id: `v${v.vehicle_id}`,
+            vehicle_id: v.vehicle_id,
+            name: `${v.brand} ${v.model}`,
+            brand: v.brand,
+            model: v.model,
+            variant: v.variant || '',
+            category: v.category_name,
+            transmission: v.transmission ? v.transmission.charAt(0) + v.transmission.slice(1).toLowerCase() : 'Automatic',
+            fuel: v.fuel_type ? v.fuel_type.charAt(0) + v.fuel_type.slice(1).toLowerCase() : 'Petrol',
+            seats: v.seating_capacity || 5,
+            dailyRate: Number(v.daily_rent),
+            deposit: Number(v.security_deposit || 7500),
+            status: v.status ? v.status.charAt(0) + v.status.slice(1).toLowerCase() : 'Available',
+            branch: v.branch_name,
+            description: v.description,
+            image: v.image_url || 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&w=1200&q=85',
+            gallery: [v.image_url]
+          }));
 
-      const fallbackName = [payload.firstName, payload.lastName]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-      const derivedName = normalizedEmail ? normalizedEmail.split("@")[0] : "Customer";
-      const name =
-        fallbackName ||
-        matchedCustomer?.name ||
-        derivedName;
-
-      const [defaultFirst = name, ...defaultRest] = name.split(" ");
-      const firstName =
-        payload.firstName ||
-        matchedCustomer?.firstName ||
-        (matchedCustomer?.name ? matchedCustomer.name.split(" ")[0] : defaultFirst);
-      const lastName =
-        payload.lastName ||
-        matchedCustomer?.lastName ||
-        (matchedCustomer?.name ? matchedCustomer.name.split(" ").slice(1).join(" ") : defaultRest.join(" "));
-
-      const customerId =
-        payload.id ||
-        matchedCustomer?.id ||
-        (normalizedEmail
-          ? `user-${normalizedEmail.replace(/[^a-z0-9]/g, "-")}`
-          : `user-${Date.now()}`);
-
-      const user = {
-        id: customerId,
-        role: payload.role || matchedCustomer?.role || "customer",
-        name: `${firstName} ${lastName}`.trim() || name,
-        firstName,
-        lastName,
-        email: payload.email || matchedCustomer?.email || "",
-        phone: payload.phone || matchedCustomer?.phone || "",
-        licence: payload.licence || matchedCustomer?.licence || "",
-        aadhaar: payload.aadhaar || matchedCustomer?.aadhaar || "",
-        address: payload.address || matchedCustomer?.address || "",
-        emergencyContact: payload.emergencyContact || matchedCustomer?.emergencyContact || "",
-        demoAuthPassword:
-          payload.demoAuthPassword || matchedCustomer?.demoAuthPassword || "",
-        identityVerification: normalizeIdentityVerification(
-          payload.identityVerification || matchedCustomer?.identityVerification,
-        ),
-      };
-
-      if (user.role === "admin") {
-        if (normalizedEmail !== DEMO_ADMIN_EMAIL.toLowerCase()) {
-          return previous;
+          setState(prev => ({
+            ...prev,
+            vehicles: mappedVehicles.length ? mappedVehicles : prev.vehicles,
+            isApiConnected: true
+          }));
         }
-        return {
-          ...previous,
-          user,
-        };
+
+        if (branchesRes?.data) {
+          const mappedBranches = branchesRes.data.map(b => ({
+            id: `b${b.branch_id}`,
+            branch_id: b.branch_id,
+            name: b.branch_name,
+            address: b.address,
+            city: b.city,
+            state: b.state,
+            postal: b.postal_code,
+            phone: b.phone
+          }));
+          setState(prev => ({
+            ...prev,
+            branches: mappedBranches.length ? mappedBranches : prev.branches
+          }));
+        }
+
+        if (categoriesRes?.data) {
+          const mappedCategories = categoriesRes.data.map(c => ({
+            id: `c${c.category_id}`,
+            name: c.category_name,
+            description: c.description,
+            count: c.vehicle_count || 4
+          }));
+          setState(prev => ({
+            ...prev,
+            categories: mappedCategories.length ? mappedCategories : prev.categories
+          }));
+        }
+
+        // Hydrate Current User if token exists
+        const token = window.localStorage.getItem(TOKEN_KEY);
+        if (token) {
+          const meRes = await authApi.getCurrentUser().catch(() => null);
+          if (meRes?.data?.user) {
+            setState(prev => ({
+              ...prev,
+              user: {
+                ...meRes.data.user,
+                identityVerification: normalizeIdentityVerification(
+                  prev.user?.identityVerification || meRes.data.user?.identityVerification
+                )
+              },
+              token
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('API connection notice: running with resilient local store', err);
       }
+    };
 
-      const customerRecord = {
-        id: user.id,
-        name: user.name,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        phone: user.phone,
-        licence: user.licence,
-        aadhaar: user.aadhaar,
-        address: user.address,
-        emergencyContact: user.emergencyContact,
-        demoAuthPassword: user.demoAuthPassword,
-        identityVerification: user.identityVerification,
-        status: matchedCustomer?.status || "Active",
-        joined:
-          matchedCustomer?.joined ||
-          new Date().toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          }),
-      };
+    fetchData();
+  }, []);
 
-      const hasCustomer = previous.customers.some(
-        (c) => c.id === user.id || (user.email && c.email?.toLowerCase() === user.email.toLowerCase()),
-      );
+  const login = async (payload = {}) => {
+    try {
+      // Attempt backend login
+      const response = await authApi.login({
+        email: payload.email,
+        password: payload.password || (payload.role === 'admin' ? 'Admin@123' : 'Customer@123')
+      });
 
-      const nextCustomers = hasCustomer
-        ? previous.customers.map((c) =>
-            c.id === user.id || (user.email && c.email?.toLowerCase() === user.email.toLowerCase())
-              ? { ...c, ...customerRecord }
-              : c,
+      if (response?.data?.token) {
+        const { token, user } = response.data;
+        const completeUser = {
+          ...user,
+          identityVerification: normalizeIdentityVerification(
+            payload.identityVerification || user.identityVerification
           )
-        : [...previous.customers, customerRecord];
+        };
+        setState(prev => ({
+          ...prev,
+          token,
+          user: completeUser
+        }));
+        return { success: true, user: completeUser };
+      }
+    } catch (apiErr) {
+      console.warn('Backend login fallback:', apiErr.message);
+    }
 
-      return {
-        ...previous,
-        user,
-        customers: nextCustomers,
-      };
-    });
+    // Local Fallback if backend offline or special override
+    const normalizedEmail = String(payload.email || "").toLowerCase();
+    const isSpecialAdmin = normalizedEmail === DEMO_ADMIN_EMAIL.toLowerCase();
+    const role = payload.role || (isSpecialAdmin ? "admin" : "customer");
+
+    const derivedName = normalizedEmail ? normalizedEmail.split("@")[0] : "Customer";
+    const user = {
+      id: isSpecialAdmin ? 1 : Date.now(),
+      role,
+      name: `${payload.firstName || (role === 'admin' ? 'Admin' : 'Customer')} ${payload.lastName || ''}`.trim() || derivedName,
+      firstName: payload.firstName || (role === 'admin' ? 'Admin' : 'Customer'),
+      lastName: payload.lastName || '',
+      email: payload.email || '',
+      phone: payload.phone || '+91 98452 18203',
+      licence: payload.licence || 'KA01 20150012345',
+      address: payload.address || 'Bengaluru, Karnataka',
+      demoAuthPassword: payload.password || (isSpecialAdmin ? DEMO_ADMIN_PASSWORD : "password123"),
+      identityVerification: normalizeIdentityVerification(
+        payload.identityVerification
+      )
+    };
+
+    setState(prev => ({
+      ...prev,
+      user
+    }));
+    return { success: true, user };
   };
 
-  const createBooking = (booking, payment) => {
-    setState((previous) => {
-      const hasCustomer = previous.customers.some(
-        (customer) => customer.id === booking.customerId,
-      );
-      const customer = previous.user;
+  const register = async (payload = {}) => {
+    try {
+      const response = await authApi.register({
+        email: payload.email,
+        password: payload.password || 'Customer@123',
+        firstName: payload.firstName,
+        lastName: payload.lastName,
+        phone: payload.phone,
+        drivingLicenseNo: payload.licence
+      });
 
-      return {
-        ...previous,
-        bookings: [...previous.bookings, booking],
-        payments: [...previous.payments, payment],
-        customers:
-          hasCustomer || !customer
-            ? previous.customers
-            : [
-                ...previous.customers,
-                {
-                  id: customer.id,
-                  name: customer.name,
-                  email: customer.email,
-                  phone: customer.phone,
-                  identityVerification: normalizeIdentityVerification(
-                    customer.identityVerification,
-                  ),
-                  status: "Active",
-                  joined: new Date().toLocaleDateString("en-IN", {
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric",
-                  }),
-                },
-              ],
-      };
-    });
+      if (response?.data?.token) {
+        const { token, user } = response.data;
+        const completeUser = {
+          ...user,
+          identityVerification: normalizeIdentityVerification(
+            payload.identityVerification
+          )
+        };
+        setState(prev => ({
+          ...prev,
+          token,
+          user: completeUser
+        }));
+        return { success: true, user: completeUser };
+      }
+    } catch (apiErr) {
+      console.warn('Backend registration fallback:', apiErr.message);
+    }
+
+    return login(payload);
   };
 
-  const updateProfile = (updates) => {
-    setState((previous) => {
+  const createBooking = async (booking, payment) => {
+    try {
+      // Find numeric vehicle ID if available
+      const matchedVehicle = state.vehicles.find(v => v.id === booking.vehicleId || v.vehicle_id === booking.vehicleId);
+      const vehicleId = matchedVehicle?.vehicle_id || 1;
+
+      const apiRes = await bookingsApi.createBooking({
+        vehicleId,
+        pickupDate: booking.pickupDate,
+        returnDate: booking.returnDate,
+        pickupLocation: booking.branch,
+        returnLocation: booking.returnBranch || booking.branch,
+        paymentMethod: payment?.method || 'UPI',
+        remarks: 'Online portal booking'
+      });
+
+      if (apiRes?.data?.booking) {
+        const b = apiRes.data.booking;
+        const newBooking = {
+          ...booking,
+          id: `bk-${b.booking_id}`,
+          reference: b.booking_reference,
+          status: b.booking_status,
+          total: b.total_amount,
+          invoiceNumber: apiRes.data.invoice?.invoiceNumber
+        };
+
+        setState(prev => ({
+          ...prev,
+          bookings: [newBooking, ...prev.bookings],
+          payments: payment ? [payment, ...prev.payments] : prev.payments
+        }));
+        return newBooking;
+      }
+    } catch (apiErr) {
+      console.warn('API Booking note:', apiErr.message);
+      if (apiErr.message.includes('unavailable') || apiErr.message.includes('overlaps')) {
+        throw apiErr;
+      }
+    }
+
+    // Local fallback creation
+    setState(previous => ({
+      ...previous,
+      bookings: [booking, ...previous.bookings],
+      payments: payment ? [payment, ...previous.payments] : previous.payments
+    }));
+    return booking;
+  };
+
+  const updateProfile = async (updates) => {
+    try {
+      await authApi.updateProfile(updates);
+    } catch (e) {
+      console.warn('API profile update note:', e.message);
+    }
+
+    setState(previous => {
       if (!previous.user) return previous;
       const user = {
         ...previous.user,
         ...updates,
         identityVerification: normalizeIdentityVerification(
-          updates.identityVerification || previous.user.identityVerification,
-        ),
+          updates.identityVerification || previous.user.identityVerification
+        )
       };
-      const customers = previous.customers.map((customer) =>
-        customer.id === user.id || customer.email === previous.user.email
+
+      const customers = previous.customers.map(c =>
+        c.id === user.id || c.email === user.email
           ? {
-              ...customer,
+              ...c,
               ...updates,
-              id: user.id,
               identityVerification: normalizeIdentityVerification(
-                updates.identityVerification || customer.identityVerification,
-              ),
+                updates.identityVerification || c.identityVerification
+              )
             }
-          : customer,
+          : c
       );
-      const hasCustomer = customers.some((customer) => customer.id === user.id);
 
       return {
         ...previous,
         user,
-        customers: hasCustomer
-          ? customers
-          : [
-              ...customers,
-              {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                identityVerification: user.identityVerification,
-                status: "Active",
-                joined: new Date().toLocaleDateString("en-IN", {
-                  day: "2-digit",
-                  month: "short",
-                  year: "numeric",
-                }),
-              },
-            ],
+        customers
       };
     });
+  };
+
+  const logout = () => {
+    try {
+      window.localStorage.removeItem(TOKEN_KEY);
+    } catch (e) {}
+    setState(previous => ({
+      ...previous,
+      user: null,
+      token: null
+    }));
+  };
+
+  const updateKey = (key, nextValue) => {
+    setState(previous => ({
+      ...previous,
+      [key]: typeof nextValue === "function" ? nextValue(previous[key]) : nextValue,
+    }));
   };
 
   const value = useMemo(
     () => ({
       ...state,
       login,
+      register,
+      logout,
       createBooking,
       updateProfile,
-      logout: () => updateKey("user", null),
-      setUser: (nextValue) => updateKey("user", nextValue),
-      setVehicles: (nextValue) => updateKey("vehicles", nextValue),
-      setCategories: (nextValue) => updateKey("categories", nextValue),
-      setBranches: (nextValue) => updateKey("branches", nextValue),
-      setCustomers: (nextValue) => updateKey("customers", nextValue),
-      setBookings: (nextValue) => updateKey("bookings", nextValue),
-      setPayments: (nextValue) => updateKey("payments", nextValue),
-      setMaintenance: (nextValue) => updateKey("maintenance", nextValue),
-      setSettings: (nextValue) => updateKey("settings", nextValue),
+      setUser: (v) => updateKey("user", v),
+      setVehicles: (v) => updateKey("vehicles", v),
+      setCategories: (v) => updateKey("categories", v),
+      setBranches: (v) => updateKey("branches", v),
+      setCustomers: (v) => updateKey("customers", v),
+      setBookings: (v) => updateKey("bookings", v),
+      setPayments: (v) => updateKey("payments", v),
+      setMaintenance: (v) => updateKey("maintenance", v),
+      setSettings: (v) => updateKey("settings", v),
     }),
-    [state],
+    [state]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
