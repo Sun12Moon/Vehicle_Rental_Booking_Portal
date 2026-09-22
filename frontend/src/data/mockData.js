@@ -70,6 +70,7 @@ export const vehicles = [
     engine: "2.0L Turbo",
     seats: 7,
     mileage: "13 km/l",
+    currentKilometres: "42,580 km",
     dailyRate: 4200,
     deposit: 10000,
     status: "Available",
@@ -96,6 +97,7 @@ export const vehicles = [
     engine: "1.5L Turbo",
     seats: 5,
     mileage: "18 km/l",
+    currentKilometres: "31,240 km",
     dailyRate: 2900,
     deposit: 7500,
     status: "Available",
@@ -122,6 +124,7 @@ export const vehicles = [
     engine: "40.5 kWh",
     seats: 5,
     mileage: "465 km range",
+    currentKilometres: "18,760 km",
     dailyRate: 3400,
     deposit: 9000,
     status: "Available",
@@ -148,6 +151,7 @@ export const vehicles = [
     engine: "1.2L",
     seats: 5,
     mileage: "22 km/l",
+    currentKilometres: "54,910 km",
     dailyRate: 1900,
     deposit: 5000,
     status: "Available",
@@ -174,6 +178,7 @@ export const vehicles = [
     engine: "2.4L",
     seats: 7,
     mileage: "15 km/l",
+    currentKilometres: "68,430 km",
     dailyRate: 4800,
     deposit: 12000,
     status: "Rented",
@@ -200,6 +205,7 @@ export const vehicles = [
     engine: "1.5L",
     seats: 5,
     mileage: "18 km/l",
+    currentKilometres: "27,320 km",
     dailyRate: 3100,
     deposit: 8000,
     status: "Maintenance",
@@ -213,6 +219,22 @@ export const vehicles = [
     ],
   },
 ];
+const identityVerification = () => ({
+  status: "not_started",
+  aadhaar: {
+    status: "not_added",
+    maskedNumber: "",
+  },
+  drivingLicence: {
+    status: "not_added",
+    licenceNumberMasked: "",
+    dateOfBirth: "",
+    expiryDate: "",
+  },
+  provider: null,
+  sessionId: null,
+  verifiedAt: null,
+});
 export const customers = [
   {
     id: "u1",
@@ -221,6 +243,8 @@ export const customers = [
     phone: "+91 98452 18203",
     status: "Active",
     joined: "12 Jan 2025",
+    demoAuthPassword: "password123",
+    identityVerification: identityVerification(),
   },
   {
     id: "u2",
@@ -229,6 +253,8 @@ export const customers = [
     phone: "+91 99872 55711",
     status: "Active",
     joined: "23 Mar 2025",
+    demoAuthPassword: "password123",
+    identityVerification: identityVerification(),
   },
   {
     id: "u3",
@@ -237,6 +263,8 @@ export const customers = [
     phone: "+91 98203 66422",
     status: "Inactive",
     joined: "04 Jun 2025",
+    demoAuthPassword: "password123",
+    identityVerification: identityVerification(),
   },
 ];
 export const bookings = [

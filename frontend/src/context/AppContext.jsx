@@ -16,6 +16,7 @@ import {
 } from "../data/mockData";
 
 export const DEMO_ADMIN_EMAIL = "admin@rentivo.in";
+export const DEMO_ADMIN_PASSWORD = "password123";
 
 const STORAGE_KEY = "rentivo-app-state-v1";
 
@@ -27,6 +28,41 @@ const seedSettings = {
   defaultSecurityDeposit: 7500,
   requireLicenceBeforeConfirmation: true,
   sendBookingNotifications: true,
+};
+
+export const defaultIdentityVerification = () => ({
+  status: "not_started",
+  aadhaar: {
+    status: "not_added",
+    maskedNumber: "",
+  },
+  drivingLicence: {
+    status: "not_added",
+    licenceNumberMasked: "",
+    dateOfBirth: "",
+    expiryDate: "",
+  },
+  provider: null,
+  sessionId: null,
+  verifiedAt: null,
+});
+
+export const normalizeIdentityVerification = (value = {}) => {
+  const defaults = defaultIdentityVerification();
+  if (!isObject(value)) return defaults;
+
+  return {
+    ...defaults,
+    ...value,
+    aadhaar: {
+      ...defaults.aadhaar,
+      ...(isObject(value.aadhaar) ? value.aadhaar : {}),
+    },
+    drivingLicence: {
+      ...defaults.drivingLicence,
+      ...(isObject(value.drivingLicence) ? value.drivingLicence : {}),
+    },
+  };
 };
 
 const initialState = {
@@ -48,17 +84,39 @@ const isObject = (value) =>
 
 const hydrateArray = (value, fallback) => (Array.isArray(value) ? value : fallback);
 
+const hydrateCustomers = (value) =>
+  hydrateArray(value, seedCustomers).map((customer) => {
+    const seededCustomer = seedCustomers.find(
+      (seedCustomer) =>
+        seedCustomer.email?.toLowerCase() === customer.email?.toLowerCase(),
+    );
+    return {
+      ...customer,
+      demoAuthPassword:
+        customer.demoAuthPassword || seededCustomer?.demoAuthPassword || "",
+      identityVerification: normalizeIdentityVerification(
+        customer.identityVerification || seededCustomer?.identityVerification,
+      ),
+    };
+  });
+
 const hydrateState = (rawState) => {
   if (!isObject(rawState)) return initialState;
 
   return {
     user: isObject(rawState.user)
-      ? { role: "customer", ...rawState.user }
+      ? {
+          role: "customer",
+          ...rawState.user,
+          identityVerification: normalizeIdentityVerification(
+            rawState.user.identityVerification,
+          ),
+        }
       : null,
     vehicles: hydrateArray(rawState.vehicles, seedVehicles),
     categories: hydrateArray(rawState.categories, seedCategories),
     branches: hydrateArray(rawState.branches, seedBranches),
-    customers: hydrateArray(rawState.customers, seedCustomers),
+    customers: hydrateCustomers(rawState.customers),
     bookings: hydrateArray(rawState.bookings, seedBookings),
     payments: hydrateArray(rawState.payments, seedPayments),
     maintenance: hydrateArray(rawState.maintenance, seedMaintenance),
@@ -146,6 +204,11 @@ export function AppProvider({ children }) {
         aadhaar: payload.aadhaar || matchedCustomer?.aadhaar || "",
         address: payload.address || matchedCustomer?.address || "",
         emergencyContact: payload.emergencyContact || matchedCustomer?.emergencyContact || "",
+        demoAuthPassword:
+          payload.demoAuthPassword || matchedCustomer?.demoAuthPassword || "",
+        identityVerification: normalizeIdentityVerification(
+          payload.identityVerification || matchedCustomer?.identityVerification,
+        ),
       };
 
       if (user.role === "admin") {
@@ -169,6 +232,8 @@ export function AppProvider({ children }) {
         aadhaar: user.aadhaar,
         address: user.address,
         emergencyContact: user.emergencyContact,
+        demoAuthPassword: user.demoAuthPassword,
+        identityVerification: user.identityVerification,
         status: matchedCustomer?.status || "Active",
         joined:
           matchedCustomer?.joined ||
@@ -220,6 +285,9 @@ export function AppProvider({ children }) {
                   name: customer.name,
                   email: customer.email,
                   phone: customer.phone,
+                  identityVerification: normalizeIdentityVerification(
+                    customer.identityVerification,
+                  ),
                   status: "Active",
                   joined: new Date().toLocaleDateString("en-IN", {
                     day: "2-digit",
@@ -235,10 +303,23 @@ export function AppProvider({ children }) {
   const updateProfile = (updates) => {
     setState((previous) => {
       if (!previous.user) return previous;
-      const user = { ...previous.user, ...updates };
+      const user = {
+        ...previous.user,
+        ...updates,
+        identityVerification: normalizeIdentityVerification(
+          updates.identityVerification || previous.user.identityVerification,
+        ),
+      };
       const customers = previous.customers.map((customer) =>
         customer.id === user.id || customer.email === previous.user.email
-          ? { ...customer, ...updates, id: user.id }
+          ? {
+              ...customer,
+              ...updates,
+              id: user.id,
+              identityVerification: normalizeIdentityVerification(
+                updates.identityVerification || customer.identityVerification,
+              ),
+            }
           : customer,
       );
       const hasCustomer = customers.some((customer) => customer.id === user.id);
@@ -255,6 +336,7 @@ export function AppProvider({ children }) {
                 name: user.name,
                 email: user.email,
                 phone: user.phone,
+                identityVerification: user.identityVerification,
                 status: "Active",
                 joined: new Date().toLocaleDateString("en-IN", {
                   day: "2-digit",

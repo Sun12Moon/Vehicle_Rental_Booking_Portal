@@ -1,6 +1,7 @@
 import React, {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
@@ -11,11 +12,18 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from "react-router-dom";
 import * as Icons from "lucide-react";
-import { AppProvider, useApp, DEMO_ADMIN_EMAIL } from "./context/AppContext";
+import {
+  AppProvider,
+  useApp,
+  DEMO_ADMIN_EMAIL,
+  DEMO_ADMIN_PASSWORD,
+  normalizeIdentityVerification,
+} from "./context/AppContext";
 import "./styles.css";
 const INR = (n) =>
   new Intl.NumberFormat("en-IN", {
@@ -52,12 +60,91 @@ function Button({ children, variant = "primary", className = "", ...props }) {
 function StatusBadge({ children }) {
   return <span className={statusClass(children)}>{children}</span>;
 }
-function FormInput({ label, error, ...props }) {
+const isVehicleBookable = (vehicle) =>
+  String(vehicle?.status || "").toLowerCase() === "available";
+const unavailableVehicleMessage = "This vehicle is currently unavailable for booking.";
+const unavailablePaymentMessage = "This vehicle is no longer available for booking.";
+const notifyLoggedOut = () => window.dispatchEvent(new Event("rentivo:logged-out"));
+const identityStatusLabel = (status) =>
+  ({
+    not_started: "Not Started",
+    pending: "Pending",
+    in_review: "In Review",
+    verified: "Verified",
+    rejected: "Rejected",
+    not_added: "Not Added",
+    added: "Added",
+  })[status] || "Not Started";
+const getIdentityVerification = (profile) =>
+  normalizeIdentityVerification(profile?.identityVerification);
+const isIdentityVerified = (profile) =>
+  getIdentityVerification(profile).status === "verified";
+const maskAadhaar = (value) => "XXXX XXXX " + String(value).slice(-4);
+const maskLicence = (value) => {
+  const compact = String(value).replace(/\s+/g, "").toUpperCase();
+  return "X".repeat(Math.max(0, compact.length - 4)) + compact.slice(-4);
+};
+const isAtLeastAge = (dateValue, age) => {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  const cutoff = new Date(
+    today.getFullYear() - age,
+    today.getMonth(),
+    today.getDate(),
+  );
+  return date <= cutoff;
+};
+const RENTAL_AGREEMENT_VERSION = "1.0";
+const agreementStorageKey = (token) => "rentivo-rental-agreement-" + token;
+const REGISTRATION_WELCOME_KEY = "rentivo-registration-welcome";
+const makeAgreementToken = () =>
+  "agr-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+const readAgreementRecord = (token) => {
+  if (!token || typeof window === "undefined") return null;
+  try {
+    return JSON.parse(window.sessionStorage.getItem(agreementStorageKey(token)));
+  } catch {
+    return null;
+  }
+};
+const agreementMatchesTrip = (record, q, vehicleId) =>
+  Boolean(
+    record?.rentalAgreementAccepted &&
+      record.vehicleId === vehicleId &&
+      record.pickup === (q.get("pickup") || "") &&
+      record.returnDate === (q.get("return") || "") &&
+      record.from === decodeURIComponent(q.get("from") || "") &&
+      record.to === decodeURIComponent(q.get("to") || q.get("from") || "") &&
+      record.version === RENTAL_AGREEMENT_VERSION,
+  );
+function VerificationGate() {
   return (
-    <label className="field">
+    <div className="verification-gate" role="alert">
+      <Icons.ShieldAlert size={18} />
+      <div>
+        <b>Identity verification is required before booking a vehicle.</b>
+        <p>This is a frontend check for the prototype. Verification will be completed after the verification service is integrated.</p>
+        <Link className="btn secondary small" to="/profile#identity-verification">
+          Go to Profile / Identity Verification
+        </Link>
+      </div>
+    </div>
+  );
+}
+function FormInput({ label, error, ...props }) {
+  const inputId = props.id || props.name;
+  const errorId = error && inputId ? `${inputId}-error` : undefined;
+  return (
+    <label className="field" htmlFor={inputId}>
       <span>{label}</span>
-      <input {...props} />
-      {error && <small className="error">{error}</small>}
+      <input
+        {...props}
+        id={inputId}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={errorId}
+      />
+      {error && <small id={errorId} className="error" role="alert">{error}</small>}
     </label>
   );
 }
@@ -99,49 +186,55 @@ function Modal({ title, children, onClose }) {
 
 function Navbar() {
   const { user, logout } = useApp();
+  const [mobileOpen, setMobileOpen] = useState(false);
   return (
     <header className="navbar">
-      <Link className="brand" to="/">
+      <Link className="brand" to="/" onClick={() => setMobileOpen(false)}>
         <span>R</span> Rentivo
       </Link>
-      <nav>
-        <NavLink end to="/">
-          Home
-        </NavLink>
-        <NavLink to="/cars">Cars</NavLink>
-        {user && user.role !== "admin" && (
-          <>
-            <NavLink to="/dashboard">Dashboard</NavLink>
-            <NavLink to="/bookings">My Bookings</NavLink>
-          </>
-        )}
-        <a href="/#offers">Offers</a>
-        <a href="/#about">About</a>
-        <a href="/#contact">Contact</a>
-      </nav>
-      <div className="nav-actions">
-        {user ? (
-          <>
-            {user.role === "admin" && (
-              <Link className="btn small secondary" to="/admin">
-                Admin Console
+      <button className="mobile-toggle" onClick={() => setMobileOpen(!mobileOpen)} aria-expanded={mobileOpen} aria-label="Toggle navigation menu">
+        {mobileOpen ? <Icons.X /> : <Icons.Menu />}
+      </button>
+      <div className={`mobile-menu ${mobileOpen ? "open" : ""}`}>
+        <nav>
+          <NavLink end to="/" onClick={() => setMobileOpen(false)}>
+            Home
+          </NavLink>
+          <NavLink to="/cars" onClick={() => setMobileOpen(false)}>Cars</NavLink>
+          {user && user.role !== "admin" && (
+            <>
+              <NavLink to="/dashboard" onClick={() => setMobileOpen(false)}>Dashboard</NavLink>
+              <NavLink to="/bookings" onClick={() => setMobileOpen(false)}>My Bookings</NavLink>
+            </>
+          )}
+          <a href="/#offers" onClick={() => setMobileOpen(false)}>Offers</a>
+          <a href="/#about" onClick={() => setMobileOpen(false)}>About</a>
+          <a href="/#contact" onClick={() => setMobileOpen(false)}>Contact</a>
+        </nav>
+        <div className="nav-actions">
+          {user ? (
+            <>
+              {user.role === "admin" && (
+                <Link className="btn small secondary" to="/admin" onClick={() => setMobileOpen(false)}>
+                  Admin Console
+                </Link>
+              )}
+              <Link className="profile-link" to="/profile" onClick={() => setMobileOpen(false)}>
+                Hi, {user.firstName || user.name}
               </Link>
-            )}
-            <Link className="profile-link" to="/profile">
-              Hi, {user.firstName}
-            </Link>
-            <Button variant="ghost" onClick={logout}>
-              Logout
-            </Button>
-          </>
-        ) : (
-          <>
-            <Link to="/login">Login</Link>
-            <Link className="btn small" to="/register">
-              Register
-            </Link>
-          </>
-        )}
+              <Button variant="ghost" onClick={() => { logout(); notifyLoggedOut(); setMobileOpen(false); }}>
+                Logout
+              </Button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" onClick={() => setMobileOpen(false)}>Login</Link>
+              <Link className="btn small" to="/register" onClick={() => setMobileOpen(false)}>
+                Register
+              </Link>
+            </>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -226,10 +319,34 @@ function SearchWidget({ compact = false }) {
     </form>
   );
 }
+function VehiclePhotoCarousel({ vehicle, className = "" }) {
+  const photos = vehicle.gallery?.length ? vehicle.gallery : [vehicle.image].filter(Boolean);
+  const [index, setIndex] = useState(0);
+  const hasMultiple = photos.length > 1;
+  const goTo = (nextIndex) => setIndex((nextIndex + photos.length) % photos.length);
+
+  return (
+    <div className={"vehicle-carousel " + className}>
+      <img src={photos[index]} alt={vehicle.name + " photo " + (index + 1)} />
+      {hasMultiple && (
+        <>
+          <button type="button" className="carousel-control prev" aria-label="Previous vehicle photo" onClick={() => goTo(index - 1)}>
+            <Icons.ChevronLeft size={20} />
+          </button>
+          <button type="button" className="carousel-control next" aria-label="Next vehicle photo" onClick={() => goTo(index + 1)}>
+            <Icons.ChevronRight size={20} />
+          </button>
+          <span className="carousel-count" aria-live="polite">{index + 1} / {photos.length}</span>
+        </>
+      )}
+    </div>
+  );
+}
 function VehicleCard({ vehicle }) {
+  const bookable = isVehicleBookable(vehicle);
   return (
     <article className="vehicle-card">
-      <img src={vehicle.image} alt={`${vehicle.brand} ${vehicle.model}`} />
+      <VehiclePhotoCarousel vehicle={vehicle} className="card-carousel" />
       <div className="vehicle-card-body">
         <div className="card-top">
           <div>
@@ -239,31 +356,25 @@ function VehicleCard({ vehicle }) {
           <StatusBadge>{vehicle.status}</StatusBadge>
         </div>
         <div className="features">
-          <span>
-            <Icons.GitBranch size={15} />
-            {vehicle.transmission}
-          </span>
-          <span>
-            <Icons.Fuel size={15} />
-            {vehicle.fuel}
-          </span>
-          <span>
-            <Icons.Users size={15} />
-            {vehicle.seats} seats
-          </span>
+          <span><Icons.GitBranch size={15} />{vehicle.transmission}</span>
+          <span><Icons.Fuel size={15} />{vehicle.fuel}</span>
+          <span><Icons.Users size={15} />{vehicle.seats} seats</span>
+          <span><Icons.Gauge size={15} />{vehicle.currentKilometres || "Kilometres unavailable"}</span>
         </div>
-        <div className="price-row">
-          <div>
+        <div className="vehicle-card-footer">
+          <div className="vehicle-card-price">
             <strong>{INR(vehicle.dailyRate)}</strong>
             <small>/ day</small>
           </div>
-          <div>
-            <Link className="btn secondary small" to={`/cars/${vehicle.id}`}>
-              Details
-            </Link>
-            <Link className="btn small" to={`/booking?vehicle=${vehicle.id}`}>
-              Book now
-            </Link>
+          <div className="vehicle-card-actions">
+            <Link className="btn secondary small" to={"/cars/" + vehicle.id}>Details</Link>
+            {bookable ? (
+              <Link className="btn small" to={"/booking?vehicle=" + vehicle.id}>Book now</Link>
+            ) : (
+              <button type="button" className="btn small unavailable-action" disabled aria-disabled="true">
+                Unavailable
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -567,62 +678,110 @@ function VehicleDetails() {
   const { vehicles } = useApp();
   const { id } = useParams(),
     v = vehicles.find((x) => x.id === id) || vehicles[0];
+  const bookable = isVehicleBookable(v);
   return (
     <CustomerLayout>
       <div className="detail-page">
         <div>
-          <div className="gallery">
-            <img src={v.image} alt={v.name} />
-            <img src={v.gallery[1]} alt={`${v.name} interior`} />
-          </div>
-          <p className="eyebrow blue">
-            {v.category} · {v.branch}
-          </p>
+          <VehiclePhotoCarousel vehicle={v} className="detail-carousel" />
+          <p className="eyebrow blue">{v.category} · {v.branch}</p>
           <h1>{v.name}</h1>
           <p className="lead">{v.description}</p>
           <section className="specs">
             <h2>Vehicle specifications</h2>
             {[
+              ["Vehicle", v.name],
               ["Brand", v.brand],
               ["Model", v.model],
+              ["Vehicle type", v.category],
               ["Variant", v.variant],
-              ["Year", v.year],
+              ["Registration / model year", v.year],
               ["Colour", v.colour],
-              ["Fuel", v.fuel],
+              ["Fuel type", v.fuel],
               ["Transmission", v.transmission],
               ["Engine", v.engine],
-              ["Seats", v.seats],
+              ["Seating capacity", v.seats + " seats"],
               ["Mileage", v.mileage],
+              ["Current Kilometres", v.currentKilometres || "Not available"],
+              ["Daily rental price", INR(v.dailyRate)],
+              ["Security deposit", INR(v.deposit)],
+              ["Availability", v.status],
             ].map(([a, b]) => (
-              <div key={a}>
-                <span>{a}</span>
-                <b>{b}</b>
-              </div>
+              <div key={a}><span>{a}</span><b>{b}</b></div>
             ))}
           </section>
         </div>
         <aside className="booking-panel">
           <StatusBadge>{v.status}</StatusBadge>
-          <h2>
-            {INR(v.dailyRate)} <small>/ day</small>
-          </h2>
+          <h2>{INR(v.dailyRate)} <small>/ day</small></h2>
+          <p>Current Kilometres: {v.currentKilometres || "Not available"}</p>
           <p>Security deposit: {INR(v.deposit)}</p>
           <hr />
           <p>Includes basic insurance and 24/7 roadside assistance.</p>
-          <Link className="btn full" to={`/booking?vehicle=${v.id}`}>
-            Book this vehicle <Icons.ArrowRight size={17} />
-          </Link>
+          {bookable ? (
+            <Link className="btn full" to={"/booking?vehicle=" + v.id}>Book this vehicle <Icons.ArrowRight size={17} /></Link>
+          ) : (
+            <button type="button" className="btn full unavailable-action" disabled aria-disabled="true">
+              Currently unavailable
+            </button>
+          )}
         </aside>
       </div>
     </CustomerLayout>
   );
 }
 
+function RentalAgreementPanel({ read, accepted, error, onRead, onAcceptedChange }) {
+  const handleScroll = (event) => {
+    const target = event.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 8) onRead();
+  };
+
+  return (
+    <section className="agreement-card" aria-labelledby="rental-agreement-title">
+      <div className="agreement-heading">
+        <div>
+          <p className="eyebrow blue">RENTAL AGREEMENT</p>
+          <h2 id="rental-agreement-title">Vehicle Rental & Damage Responsibility Agreement</h2>
+        </div>
+        <StatusBadge>{read ? "Read" : "Read Required"}</StatusBadge>
+      </div>
+      <div className="agreement-copy" tabIndex="0" onScroll={handleScroll}>
+        <h3>1. Vehicle Condition</h3>
+        <p>The customer acknowledges that the vehicle is provided in the condition described or displayed at the time of handover and agrees to take reasonable care of the vehicle throughout the rental period.</p>
+        <h3>2. Customer Responsibility</h3>
+        <p>The customer is responsible for the vehicle during the rental period and must operate and use it responsibly and in accordance with applicable laws and the rental terms.</p>
+        <h3>3. Damage Responsibility</h3>
+        <p>The customer may be responsible for the cost of repairing damage to the vehicle that occurs during the rental period, subject to the applicable rental terms, exclusions, insurance coverage, and any legally applicable limitations.</p>
+        <h3>4. Accidents and Incidents</h3>
+        <p>The customer must promptly report accidents, theft, loss, or other significant incidents involving the vehicle to the rental provider and, where required, the appropriate authorities.</p>
+        <h3>5. Inspection</h3>
+        <p>The customer acknowledges that vehicle condition may be inspected before and after the rental period. Any newly identified damage may be documented and assessed according to the applicable rental terms.</p>
+        <h3>6. Prohibited Use</h3>
+        <p>The customer agrees not to use the vehicle for prohibited, unlawful, or unauthorized purposes or in a manner that violates the rental terms.</p>
+        <h3>7. Charges for Damage</h3>
+        <p>Where the customer is determined to be responsible for covered damage, the applicable repair or related charges may be payable by the customer in accordance with the rental terms.</p>
+        <h3>8. Acknowledgement</h3>
+        <p>The customer confirms that they have read and understood the vehicle rental and damage responsibility terms before proceeding with the booking. This frontend prototype agreement has not been legally reviewed.</p>
+      </div>
+      <label className="check-row agreement-check">
+        <input type="checkbox" name="rentalAgreementAccepted" checked={accepted} disabled={!read} aria-invalid={error ? "true" : undefined} aria-describedby={error ? "rental-agreement-error" : "rental-agreement-help"} onChange={(event) => onAcceptedChange(event.target.checked)} />
+        I have read and agree to the Vehicle Rental & Damage Responsibility Agreement.
+      </label>
+      <small id="rental-agreement-help" className="agreement-help">Scroll to the bottom of the agreement to enable this checkbox.</small>
+      {error && <small id="rental-agreement-error" className="error" role="alert">{error}</small>}
+    </section>
+  );
+}
 function Booking() {
-  const { vehicles, branches } = useApp();
+  const { vehicles, branches, user, customers } = useApp();
   const nav = useNavigate();
   const selected =
     new URLSearchParams(location.search).get("vehicle") || vehicles[0].id;
+  const [verificationBlocked, setVerificationBlocked] = useState(false);
+  const [agreementRead, setAgreementRead] = useState(false);
+  const [agreementAccepted, setAgreementAccepted] = useState(false);
+  const [agreementError, setAgreementError] = useState("");
   const [vehicleId, setVehicleId] = useState(selected),
     [form, setForm] = useState({
       pickup: dateISO(new Date(Date.now() + 86400000)),
@@ -631,15 +790,51 @@ function Booking() {
       returnLocation: branches[0].name,
       code: "",
     });
-  const v = vehicles.find((x) => x.id === vehicleId);
+  const currentCustomer =
+    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
+    customers.find((customer) => customer.id === user?.id) ||
+    user;
+  const v = vehicles.find((x) => x.id === vehicleId) || vehicles[0];
+  const bookable = isVehicleBookable(v);
   const days = daysBetween(form.pickup, form.return),
     valid = form.return > form.pickup;
   const reserve = (e) => {
     e.preventDefault();
-    if (!valid) return;
-    nav(
-      `/payment?vehicle=${v.id}&pickup=${form.pickup}&return=${form.return}&from=${encodeURIComponent(form.pickupLocation)}&to=${encodeURIComponent(form.returnLocation)}`,
+    if (!valid || !bookable) return;
+    if (!isIdentityVerified(currentCustomer)) {
+      setVerificationBlocked(true);
+      return;
+    }
+    setVerificationBlocked(false);
+    if (!agreementRead || !agreementAccepted) {
+      setAgreementError("You must read and agree to the Vehicle Rental & Damage Responsibility Agreement before continuing.");
+      return;
+    }
+    const agreementToken = makeAgreementToken();
+    const agreementAcceptedAt = new Date().toISOString();
+    window.sessionStorage.setItem(
+      agreementStorageKey(agreementToken),
+      JSON.stringify({
+        rentalAgreementAccepted: true,
+        rentalAgreementAcceptedAt: agreementAcceptedAt,
+        version: RENTAL_AGREEMENT_VERSION,
+        vehicleId: v.id,
+        pickup: form.pickup,
+        returnDate: form.return,
+        from: form.pickupLocation,
+        to: form.returnLocation,
+      }),
     );
+    const params = new URLSearchParams({
+      vehicle: v.id,
+      pickup: form.pickup,
+      return: form.return,
+      from: form.pickupLocation,
+      to: form.returnLocation,
+      code: form.code,
+      agreement: agreementToken,
+    });
+    nav("/payment?" + params.toString());
   };
   return (
     <CustomerLayout>
@@ -680,6 +875,17 @@ function Booking() {
             {!valid && (
               <p className="error">Return date must be after pickup date.</p>
             )}
+            {!bookable && (
+              <div className="verification-gate" role="alert">
+                <Icons.AlertTriangle size={18} />
+                <div>
+                  <b>{unavailableVehicleMessage}</b>
+                  <p>You can still review this vehicle, but reservations are disabled while it is {String(v.status).toLowerCase()}.</p>
+                  <Link className="btn secondary small" to={"/cars/" + v.id}>Back to vehicle details</Link>
+                </div>
+              </div>
+            )}
+            {verificationBlocked && <VerificationGate />}
             <div className="two-col">
               <label className="field">
                 <span>Pickup branch</span>
@@ -716,15 +922,26 @@ function Booking() {
                 setForm({ ...form, code: e.target.value.toUpperCase() })
               }
             />
-            <Button className="full" type="submit" disabled={!valid}>
+            <RentalAgreementPanel
+              read={agreementRead}
+              accepted={agreementAccepted}
+              error={agreementError}
+              onRead={() => setAgreementRead(true)}
+              onAcceptedChange={(checked) => {
+                setAgreementAccepted(checked);
+                if (checked) setAgreementError("");
+              }}
+            />
+            <Button className="full" type="submit" disabled={!valid || !bookable}>
               Continue to payment <Icons.ArrowRight size={17} />
             </Button>
           </form>
         </section>
         <aside>
           <div className="booking-panel">
-            <img src={v.image} alt={v.name} />
+            <VehiclePhotoCarousel vehicle={v} className="summary-carousel" />
             <h3>{v.name}</h3>
+            <p className="summary-spec"><b>Current Kilometres:</b> {v.currentKilometres || "Not available"}</p>
             <p>
               {days} rental day{days !== 1 ? "s" : ""} · {form.pickupLocation}
             </p>
@@ -744,7 +961,7 @@ function Booking() {
   );
 }
 function Payment() {
-  const { vehicles, user, createBooking } = useApp();
+  const { vehicles, user, customers, createBooking } = useApp();
   const nav = useNavigate(),
     q = new URLSearchParams(location.search),
     v = vehicles.find((x) => x.id === q.get("vehicle")) || vehicles[0],
@@ -752,13 +969,24 @@ function Payment() {
       q.get("pickup") || dateISO(new Date()),
       q.get("return") || dateISO(new Date(Date.now() + 86400000)),
     );
+  const code = q.get("code") || "";
+  const currentCustomer =
+    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
+    customers.find((customer) => customer.id === user?.id) ||
+    user;
+  const identityVerified = isIdentityVerified(currentCustomer);
+  const bookable = isVehicleBookable(v);
+  const agreementToken = q.get("agreement") || "";
+  const agreementRecord = readAgreementRecord(agreementToken);
+  const agreementAccepted = agreementMatchesTrip(agreementRecord, q, v.id);
   const [method, setMethod] = useState("UPI"),
     [state, setState] = useState("ready");
   const subtotal = v.dailyRate * days,
-    discount = 0,
+    discount = code === "WEEKEND15" && days >= 2 ? Math.round(subtotal * 0.15) : 0,
     tax = Math.round((subtotal - discount) * 0.18),
     total = subtotal - discount + tax + v.deposit;
   const pay = () => {
+    if (!identityVerified || !agreementAccepted || !bookable) return;
     setState("processing");
     setTimeout(() => {
       if (method === "Wallet") setState("failed");
@@ -785,12 +1013,15 @@ function Payment() {
           paymentMethod: method,
           paymentStatus: "Paid",
           status: "Upcoming",
+          rentalAgreementAccepted: true,
+          rentalAgreementAcceptedAt: agreementRecord.rentalAgreementAcceptedAt,
+          rentalAgreementVersion: agreementRecord.version,
         };
         const payment = {
           id: `pay-${Date.now()}`,
           transaction: `pay_${Math.random().toString(36).slice(2, 10)}`,
           booking: reference,
-          customer: user?.name || "Aditi Menon",
+          customer: user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Guest Customer",
           amount: total,
           method,
           gateway: "Razorpay",
@@ -815,6 +1046,27 @@ function Payment() {
           <p className="eyebrow blue">STEP 2 OF 2</p>
           <h1>Secure payment</h1>
           <div className="payment-card">
+            {!bookable && (
+              <div className="verification-gate" role="alert">
+                <Icons.AlertTriangle size={18} />
+                <div>
+                  <b>{unavailablePaymentMessage}</b>
+                  <p>Please choose another available vehicle before completing payment.</p>
+                  <Link className="btn secondary small" to="/cars">Back to Cars</Link>
+                </div>
+              </div>
+            )}
+            {!identityVerified && <VerificationGate />}
+            {identityVerified && !agreementAccepted && (
+              <div className="verification-gate" role="alert">
+                <Icons.FileWarning size={18} />
+                <div>
+                  <b>Please read and accept the Vehicle Rental & Damage Responsibility Agreement before completing this booking.</b>
+                  <p>Return to the booking step and complete the agreement before payment.</p>
+                  <Link className="btn secondary small" to={"/booking?vehicle=" + v.id}>Back to booking agreement</Link>
+                </div>
+              </div>
+            )}
             <div className="gateway">
               <span>rzp</span>
               <div>
@@ -855,7 +1107,7 @@ function Payment() {
                     continue.
                   </p>
                 )}
-                <Button className="full" onClick={pay}>
+                <Button className="full" onClick={pay} disabled={!identityVerified || !agreementAccepted || !bookable}>
                   Pay {INR(total)}{" "}
                   <Icons.LockKeyhole size={16} />
                 </Button>
@@ -869,13 +1121,13 @@ function Payment() {
         </section>
         <aside className="booking-panel">
           <h3>Booking summary</h3>
-          <img src={v.image} alt={v.name} />
+          <VehiclePhotoCarousel vehicle={v} className="summary-carousel" />
           <p>
             <b>{v.name}</b>
             <br />
             {q.get("pickup")} to {q.get("return")}
           </p>
-          <PriceBreakdown vehicle={v} days={days} />
+          <PriceBreakdown vehicle={v} days={days} discount={discount} />
         </aside>
       </div>
     </CustomerLayout>
@@ -942,15 +1194,15 @@ function Confirmation() {
 
 function Auth({ register = false }) {
   const nav = useNavigate(),
-    { login } = useApp(),
-    [error, setError] = useState(""),
+    { login, customers } = useApp(),
+    [errors, setErrors] = useState({}),
     [resetMessage, setResetMessage] = useState(""),
     [roleMode, setRoleMode] = useState("customer"),
     [email, setEmail] = useState("");
 
   const handleRoleSwitch = (mode) => {
     setRoleMode(mode);
-    setError("");
+    setErrors({});
     if (mode === "admin") {
       setEmail(DEMO_ADMIN_EMAIL);
     } else {
@@ -960,47 +1212,114 @@ function Auth({ register = false }) {
 
   const submit = (e) => {
     e.preventDefault();
-    setError("");
-    const fd = new FormData(e.currentTarget);
-    const emailInput = String(fd.get("email") || "").trim().toLowerCase();
+    setErrors({});
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    const emailInput = String(fd.get("email") || "").trim();
+    const password = String(fd.get("password") || "");
 
-    if (register && fd.get("password") !== fd.get("confirm"))
-      return setError("Passwords do not match.");
+    const newErrors = {};
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailInput) {
+      newErrors.email = "Email is required.";
+    } else if (!emailRegex.test(emailInput)) {
+      newErrors.email = "Enter a valid email address.";
+    }
+
+    if (!password) {
+      newErrors.password = "Password is required.";
+    } else if (register && password.length < 8) {
+      newErrors.password = "Password must be at least 8 characters.";
+    }
+
+    if (register) {
+      const firstName = String(fd.get("firstName") || "").trim();
+      const lastName = String(fd.get("lastName") || "").trim();
+      const phone = String(fd.get("phone") || "").trim();
+      const confirm = String(fd.get("confirm") || "");
+
+      if (!firstName) newErrors.firstName = "First name is required.";
+      if (!lastName) newErrors.lastName = "Last name is required.";
+
+      if (!phone) {
+        newErrors.phone = "Phone number is required.";
+      } else if (!/^[6-9]\d{9}$/.test(phone)) {
+        newErrors.phone = "Enter a valid 10-digit mobile number.";
+      }
+
+      if (!confirm) {
+        newErrors.confirm = "Confirm your password.";
+      } else if (password && confirm !== password) {
+        newErrors.confirm = "Passwords do not match.";
+      }
+
+      if (fd.get("terms") !== "on") {
+        newErrors.terms = "You must agree to the Terms and Privacy Policy.";
+      }
+
+      if (!newErrors.email && customers.some(c => c.email?.toLowerCase() === emailInput.toLowerCase())) {
+        newErrors.email = "An account with this email already exists.";
+      }
+    } else {
+      if (roleMode === "admin") {
+        if (!newErrors.email && emailInput.toLowerCase() !== DEMO_ADMIN_EMAIL.toLowerCase()) {
+          newErrors.email = "Unauthorized admin account.";
+        } else if (!newErrors.password && password !== DEMO_ADMIN_PASSWORD) {
+          newErrors.email = "Invalid email or password.";
+        }
+      } else {
+        if (!newErrors.email && !newErrors.password) {
+          const customer = customers.find(
+            (candidate) => candidate.email?.toLowerCase() === emailInput.toLowerCase(),
+          );
+          if (!customer || customer.demoAuthPassword !== password) {
+            newErrors.email = "Invalid email or password.";
+          }
+        }
+      }
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      const firstErrorField = form.querySelector(`[name="${Object.keys(newErrors)[0]}"]`);
+      if (firstErrorField) firstErrorField.focus();
+      return;
+    }
 
     if (!register && roleMode === "admin") {
-      if (emailInput !== DEMO_ADMIN_EMAIL.toLowerCase()) {
-        setError("Unauthorized admin account.");
-        return;
-      }
       login({
         firstName: fd.get("firstName") || "Admin",
         lastName: fd.get("lastName") || "Manager",
-        email: emailInput,
+        email: emailInput.toLowerCase(),
         phone: fd.get("phone") || "+91 99000 00000",
         role: "admin",
       });
       nav("/admin");
     } else if (!register) {
       login({
-        email: emailInput,
+        email: emailInput.toLowerCase(),
         role: "customer",
       });
       nav("/dashboard");
     } else {
       login({
-        firstName: fd.get("firstName") || "",
-        lastName: fd.get("lastName") || "",
-        email: emailInput,
-        phone: fd.get("phone") || "",
+        firstName: fd.get("firstName").trim(),
+        lastName: fd.get("lastName").trim(),
+        email: emailInput.toLowerCase(),
+        phone: fd.get("phone").trim(),
+        demoAuthPassword: password,
         role: "customer",
       });
+      window.sessionStorage.setItem(REGISTRATION_WELCOME_KEY, emailInput.toLowerCase());
       nav("/dashboard");
     }
   };
+
   return (
     <CustomerLayout>
       <section className="auth-page">
-        <form className="auth-card" onSubmit={submit}>
+        <form className="auth-card" onSubmit={submit} noValidate>
           <Link className="brand center-brand" to="/">
             <span>R</span> Rentivo
           </Link>
@@ -1030,8 +1349,8 @@ function Auth({ register = false }) {
           )}
           {register && (
             <div className="two-col">
-              <FormInput name="firstName" label="First name" required />
-              <FormInput name="lastName" label="Last name" required />
+              <FormInput name="firstName" label="First name" error={errors.firstName} />
+              <FormInput name="lastName" label="Last name" error={errors.lastName} />
             </div>
           )}
           <FormInput
@@ -1039,25 +1358,27 @@ function Auth({ register = false }) {
             label="Email address"
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (errors.email) setErrors({ ...errors, email: "" });
+            }}
+            error={errors.email}
           />
           {register && (
-            <FormInput name="phone" label="Phone number" type="tel" required />
+            <FormInput name="phone" label="Phone number" type="tel" error={errors.phone} />
           )}
           <FormInput
             name="password"
             label="Password"
             type="password"
-            minLength="6"
-            required
+            error={errors.password}
           />
           {register && (
             <FormInput
               name="confirm"
               label="Confirm password"
               type="password"
-              required
+              error={errors.confirm}
             />
           )}
           {!register && (
@@ -1077,12 +1398,23 @@ function Auth({ register = false }) {
             </div>
           )}
           {register && (
-            <label className="check-row">
-              <input type="checkbox" required /> I agree to the Terms and
-              Privacy Policy
-            </label>
+            <div className="terms-field">
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  name="terms"
+                  aria-invalid={errors.terms ? "true" : undefined}
+                  aria-describedby={errors.terms ? "terms-error" : undefined}
+                />
+                I agree to the Terms and Privacy Policy
+              </label>
+              {errors.terms && (
+                <small id="terms-error" className="error" role="alert">
+                  {errors.terms}
+                </small>
+              )}
+            </div>
           )}
-          {error && <p className="error">{error}</p>}
           {resetMessage && <p className="green">{resetMessage}</p>}
           <Button className="full">
             {register ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
@@ -1098,10 +1430,179 @@ function Auth({ register = false }) {
     </CustomerLayout>
   );
 }
+function IdentityVerificationPanel({ customer, onSave }) {
+  const identity = getIdentityVerification(customer);
+  const [aadhaarErrors, setAadhaarErrors] = useState({});
+  const [licenceErrors, setLicenceErrors] = useState({});
+  const [message, setMessage] = useState("");
+
+  const saveAadhaar = (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const aadhaarNumber = String(new FormData(form).get("aadhaarNumber") || "").trim();
+    const nextErrors = {};
+
+    if (!aadhaarNumber) {
+      nextErrors.aadhaarNumber = "Aadhaar / National ID is required.";
+    } else if (!/^\d{12}$/.test(aadhaarNumber)) {
+      nextErrors.aadhaarNumber = "Enter exactly 12 digits with no spaces or letters.";
+    }
+
+    if (Object.keys(nextErrors).length) {
+      setAadhaarErrors(nextErrors);
+      form.querySelector('[name="aadhaarNumber"]')?.focus();
+      return;
+    }
+
+    setAadhaarErrors({});
+    onSave({
+      identityVerification: {
+        ...identity,
+        status: identity.status === "verified" ? "verified" : "pending",
+        aadhaar: {
+          ...identity.aadhaar,
+          status: "added",
+          maskedNumber: maskAadhaar(aadhaarNumber),
+        },
+      },
+    });
+    form.reset();
+    setMessage("Aadhaar / National ID details saved. Verification is still pending.");
+  };
+
+  const saveLicence = (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const licenceNumber = String(values.get("licenceNumber") || "").trim().toUpperCase();
+    const dateOfBirth = String(values.get("dateOfBirth") || "");
+    const expiryDate = String(values.get("expiryDate") || "");
+    const today = dateISO(new Date());
+    const nextErrors = {};
+
+    if (!licenceNumber) {
+      nextErrors.licenceNumber = "Driving licence number is required.";
+    } else if (!/^[A-Z0-9 -]{6,20}$/.test(licenceNumber)) {
+      nextErrors.licenceNumber = "Use 6-20 letters or numbers for the licence number.";
+    }
+
+    if (!dateOfBirth) {
+      nextErrors.dateOfBirth = "Date of birth is required.";
+    } else if (!isAtLeastAge(dateOfBirth, 18)) {
+      nextErrors.dateOfBirth = "Customer must be at least 18 years old.";
+    }
+
+    if (!expiryDate) {
+      nextErrors.expiryDate = "Licence expiry date is required.";
+    } else if (Number.isNaN(new Date(expiryDate).getTime())) {
+      nextErrors.expiryDate = "Enter a valid expiry date.";
+    } else if (expiryDate < today) {
+      nextErrors.expiryDate = "Licence expiry date cannot be in the past.";
+    }
+
+    if (Object.keys(nextErrors).length) {
+      setLicenceErrors(nextErrors);
+      form.querySelector('[name="' + Object.keys(nextErrors)[0] + '"]')?.focus();
+      return;
+    }
+
+    setLicenceErrors({});
+    onSave({
+      identityVerification: {
+        ...identity,
+        status: identity.status === "verified" ? "verified" : "pending",
+        drivingLicence: {
+          ...identity.drivingLicence,
+          status: "added",
+          licenceNumberMasked: maskLicence(licenceNumber),
+          dateOfBirth,
+          expiryDate,
+        },
+      },
+    });
+    form.reset();
+    setMessage("Driving licence details saved. Verification is still pending.");
+  };
+
+  return (
+    <section className="form-card identity-card" id="identity-verification">
+      <div className="card-heading">
+        <div>
+          <h2>Identity Verification</h2>
+          <p>Documents can be prepared now. Final verification will happen after the verification service is integrated.</p>
+        </div>
+        <StatusBadge>{identityStatusLabel(identity.status)}</StatusBadge>
+      </div>
+      <div className="identity-status-grid">
+        <p>
+          <span>Aadhaar / National ID</span>
+          <b>{identityStatusLabel(identity.aadhaar.status)}</b>
+          {identity.aadhaar.maskedNumber && <small>{identity.aadhaar.maskedNumber}</small>}
+        </p>
+        <p>
+          <span>Driving Licence</span>
+          <b>{identityStatusLabel(identity.drivingLicence.status)}</b>
+          {identity.drivingLicence.licenceNumberMasked && <small>{identity.drivingLicence.licenceNumberMasked}</small>}
+        </p>
+      </div>
+
+      <form className="identity-form" onSubmit={saveAadhaar} noValidate>
+        <h3>Aadhaar / National ID</h3>
+        <FormInput
+          label="12-digit input"
+          name="aadhaarNumber"
+          inputMode="numeric"
+          maxLength="12"
+          placeholder="Enter 12 digits"
+          error={aadhaarErrors.aadhaarNumber}
+        />
+        <Button type="submit" variant="secondary">Save Aadhaar details</Button>
+      </form>
+
+      <form className="identity-form" onSubmit={saveLicence} noValidate>
+        <h3>Driving Licence</h3>
+        <FormInput
+          label="Licence number"
+          name="licenceNumber"
+          placeholder="e.g. KA0120150012345"
+          error={licenceErrors.licenceNumber}
+        />
+        <div className="two-col">
+          <FormInput
+            label="Date of birth"
+            name="dateOfBirth"
+            type="date"
+            error={licenceErrors.dateOfBirth}
+          />
+          <FormInput
+            label="Licence expiry date"
+            name="expiryDate"
+            type="date"
+            min={dateISO(new Date())}
+            error={licenceErrors.expiryDate}
+          />
+        </div>
+        <Button type="submit" variant="secondary">Save licence details</Button>
+      </form>
+
+      <Button
+        type="button"
+        className="full"
+        onClick={() => setMessage("Identity verification integration is not connected yet. Your documents can be prepared now, but verification will be completed after the verification service is integrated.")}
+      >
+        Start Verification
+      </Button>
+      {message && <p className="green">{message}</p>}
+    </section>
+  );
+}
 function Profile() {
   const { customers, user, updateProfile } = useApp();
   const [edit, setEdit] = useState(false),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [passwordOpen, setPasswordOpen] = useState(false),
+    [passwordErrors, setPasswordErrors] = useState({}),
+    [passwordMessage, setPasswordMessage] = useState("");
   const c =
     customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
     customers.find((customer) => customer.id === user?.id) ||
@@ -1111,17 +1612,61 @@ function Profile() {
   const displayName = c?.name || user?.name || [c?.firstName || user?.firstName, c?.lastName || user?.lastName].filter(Boolean).join(" ") || "Customer";
   const displayEmail = c?.email || user?.email || "";
   const displayPhone = c?.phone || user?.phone || "";
+  const displayAddress = c?.address || user?.address || "";
+  const displayEmergencyContact = c?.emergencyContact || user?.emergencyContact || "";
 
   const [calcFirstName = "", ...calcLastName] = (displayName || "").split(" ");
   const firstNameVal = c?.firstName || user?.firstName || calcFirstName;
   const lastNameVal = c?.lastName || user?.lastName || calcLastName.join(" ");
 
   const avatarInitials = (
-    (firstNameVal && lastNameVal ? `${firstNameVal[0]}${lastNameVal[0]}` : null) ||
+    (firstNameVal && lastNameVal ? firstNameVal[0] + lastNameVal[0] : null) ||
     (displayName ? displayName.split(" ").map((n) => n[0]).join("") : "C")
   )
     .slice(0, 2)
     .toUpperCase();
+
+  const handlePasswordChange = (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const currentPassword = String(values.get("currentPassword") || "");
+    const newPassword = String(values.get("newPassword") || "");
+    const confirmPassword = String(values.get("confirmPassword") || "");
+    const storedPassword = c?.demoAuthPassword || user?.demoAuthPassword || "";
+    const nextErrors = {};
+
+    if (!currentPassword) {
+      nextErrors.currentPassword = "Current password is required.";
+    } else if (currentPassword !== storedPassword) {
+      nextErrors.currentPassword = "Current password is incorrect.";
+    }
+
+    if (!newPassword) {
+      nextErrors.newPassword = "New password is required.";
+    } else if (newPassword.length < 8) {
+      nextErrors.newPassword = "Password must be at least 8 characters.";
+    } else if (newPassword === currentPassword) {
+      nextErrors.newPassword = "New password must be different from the current password.";
+    }
+
+    if (!confirmPassword) {
+      nextErrors.confirmPassword = "Confirm your new password.";
+    } else if (newPassword && confirmPassword !== newPassword) {
+      nextErrors.confirmPassword = "Passwords do not match.";
+    }
+
+    if (Object.keys(nextErrors).length) {
+      setPasswordErrors(nextErrors);
+      form.querySelector('[name="' + Object.keys(nextErrors)[0] + '"]')?.focus();
+      return;
+    }
+
+    updateProfile({ demoAuthPassword: newPassword });
+    setPasswordErrors({});
+    setPasswordMessage("Password changed successfully.");
+    form.reset();
+  };
 
   return (
     <CustomerLayout>
@@ -1148,11 +1693,9 @@ function Profile() {
               updateProfile({
                 firstName,
                 lastName,
-                name: `${firstName} ${lastName}`.trim(),
+                name: (firstName + " " + lastName).trim(),
                 email: values.get("email").trim(),
                 phone: values.get("phone").trim(),
-                licence: values.get("licence").trim(),
-                aadhaar: values.get("aadhaar").trim(),
                 address: values.get("address").trim(),
                 emergencyContact: values.get("emergencyContact").trim(),
               });
@@ -1177,48 +1720,52 @@ function Profile() {
             </div>
             <FormInput label="Email" name="email" defaultValue={displayEmail} disabled={!edit} />
             <FormInput label="Phone" name="phone" defaultValue={displayPhone} disabled={!edit} />
-            <h3>Identity & licence</h3>
-            <div className="two-col">
-              <FormInput
-                label="Driving licence number"
-                name="licence"
-                defaultValue={c.licence || "KA01 20150012345"}
-                disabled={!edit}
-              />
-              <FormInput
-                label="Aadhaar (masked)"
-                name="aadhaar"
-                defaultValue={c.aadhaar || "XXXX XXXX 4821"}
-                disabled={!edit}
-              />
-            </div>
             <h3>Address & emergency contact</h3>
             <FormInput
               label="Address"
               name="address"
-              defaultValue={c.address || "14, Indiranagar, Bengaluru, Karnataka 560038"}
+              defaultValue={displayAddress}
+              placeholder="Not added yet"
               disabled={!edit}
             />
             <FormInput
               label="Emergency contact"
               name="emergencyContact"
-              defaultValue={c.emergencyContact || "Arjun Menon · +91 98765 44321"}
+              defaultValue={displayEmergencyContact}
+              placeholder="Not added yet"
               disabled={!edit}
             />
             {edit && <Button type="submit">Save changes</Button>}
             {message && <p className="green">{message}</p>}
           </form>
-          <aside className="booking-panel">
-            <h3>Account security</h3>
-            <p>Keep your Rentivo account secure with a strong password.</p>
-            <Button
-              variant="secondary"
-              className="full"
-              onClick={() => setMessage("Password changes are available in the live account service.")}
-            >
-              Change password
-            </Button>
-          </aside>
+          <div className="profile-side">
+            <IdentityVerificationPanel customer={c} onSave={updateProfile} />
+            <aside className="booking-panel account-security-card">
+              <h3>Account security</h3>
+              <p>Keep your Rentivo account secure with a strong password.</p>
+              <Button
+                type="button"
+                variant="secondary"
+                className="full"
+                onClick={() => {
+                  setPasswordOpen(!passwordOpen);
+                  setPasswordErrors({});
+                  setPasswordMessage("");
+                }}
+              >
+                Change password
+              </Button>
+              {passwordOpen && (
+                <form className="password-form" onSubmit={handlePasswordChange} noValidate>
+                  <FormInput label="Current password" name="currentPassword" type="password" error={passwordErrors.currentPassword} />
+                  <FormInput label="New password" name="newPassword" type="password" error={passwordErrors.newPassword} />
+                  <FormInput label="Confirm new password" name="confirmPassword" type="password" error={passwordErrors.confirmPassword} />
+                  <Button type="submit" className="full">Update password</Button>
+                </form>
+              )}
+              {passwordMessage && <p className="green">{passwordMessage}</p>}
+            </aside>
+          </div>
         </div>
       </section>
     </CustomerLayout>
@@ -1259,33 +1806,25 @@ function Bookings() {
 }
 function BookingRow({ b, admin = false }) {
   const { vehicles, customers } = useApp();
-  const v = vehicles.find((x) => x.id === b.vehicleId),
+  const v = vehicles.find((x) => x.id === b.vehicleId) || vehicles[0],
     c = customers.find((x) => x.id === b.customerId);
   return (
     <article className="booking-row">
-      <img src={v.image} alt="" />
-      <div>
+      <img className="booking-row-image" src={v.image} alt="" />
+      <div className="booking-row-main">
         <p className="eyebrow">{b.reference}</p>
         <h3>{v.name}</h3>
-        <p>
-          {b.pickupDate} — {b.returnDate} · {b.branch}
-        </p>
-        {admin && (
-          <p>
-            {c.name} · {c.email}
-          </p>
-        )}
+        <p>{b.pickupDate} — {b.returnDate} · {b.branch}</p>
+        {admin && <p>{c?.name || "Guest"} · {c?.email || "No email"}</p>}
       </div>
-      <div>
+      <div className="booking-row-meta">
         <StatusBadge>{b.status}</StatusBadge>
-        <p>
-          <b>{INR(b.total)}</b> · <StatusBadge>{b.paymentStatus}</StatusBadge>
-        </p>
+        <div className="booking-row-payment">
+          <b>{INR(b.total)}</b>
+          <StatusBadge>{b.paymentStatus}</StatusBadge>
+        </div>
       </div>
-      <Link
-        className="btn secondary small"
-        to={admin ? "/admin/bookings" : "/bookings/" + b.id}
-      >
+      <Link className="btn secondary small booking-row-action" to={admin ? "/admin/bookings" : "/bookings/" + b.id}>
         View details
       </Link>
     </article>
@@ -1320,7 +1859,7 @@ function BookingDetails() {
             <div className="info-list">
               <p>
                 <span>Customer</span>
-                <b>{c.name}</b>
+                <b>{c?.name || "Guest Customer"}</b>
               </p>
               <p>
                 <span>Pickup / return</span>
@@ -1390,10 +1929,11 @@ const adminNav = [
 ];
 function AdminLayout({ children }) {
   const { logout } = useApp();
-  const nav = useNavigate();
+  const hour = new Date().getHours();
+  const adminGreeting = hour >= 5 && hour < 12 ? "Good morning" : hour >= 12 && hour < 17 ? "Good afternoon" : "Good evening";
   const handleLogout = () => {
     logout();
-    nav("/login");
+    notifyLoggedOut();
   };
   return (
     <div className="admin-shell">
@@ -1418,7 +1958,7 @@ function AdminLayout({ children }) {
         <header className="admin-top">
           <div>
             <p>Operations workspace</p>
-            <h3>Good morning, Admin</h3>
+            <h3>{adminGreeting}, Admin</h3>
           </div>
           <div className="admin-user" style={{ display: "flex", alignItems: "center", gap: "14px" }}>
             <Link to="/" className="text-link" style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: "5px" }}>
@@ -1714,7 +2254,7 @@ function CrudPage({ type }) {
     },
     Customers: {
       items: customers,
-      cols: ["Customer", "Phone", "Joined", "Bookings", "Account", ""],
+      cols: ["Customer", "Phone", "Identity Status", "Aadhaar Status", "Driving Licence Status", "Account", ""],
       render: (c) => (
         <>
           <td>
@@ -1722,8 +2262,9 @@ function CrudPage({ type }) {
             <small>{c.email}</small>
           </td>
           <td>{c.phone}</td>
-          <td>{c.joined}</td>
-          <td>{bookings.filter((b) => b.customerId === c.id).length}</td>
+          <td><StatusBadge>{identityStatusLabel(getIdentityVerification(c).status)}</StatusBadge></td>
+          <td>{identityStatusLabel(getIdentityVerification(c).aadhaar.status)}</td>
+          <td>{identityStatusLabel(getIdentityVerification(c).drivingLicence.status)}</td>
           <td>
             <StatusBadge>{c.status}</StatusBadge>
           </td>
@@ -2221,92 +2762,234 @@ function Maintenance() {
 }
 function Reports() {
   const { branches, bookings, payments, customers, vehicles } = useApp();
-  const [filter, setFilter] = useState("Last 30 days"),
+  const [dateRange, setDateRange] = useState("All time"),
     [branch, setBranch] = useState("All branches"),
     [status, setStatus] = useState("All statuses");
-  const visibleBookings = bookings.filter(
+
+  const bookingStatuses = ["All statuses", ...Array.from(new Set(bookings.map((booking) => booking.status).filter(Boolean)))];
+  const now = new Date();
+  const dateRangeStart = (range) => {
+    if (range === "Last 7 days") return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+    if (range === "Last 30 days") return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+    if (range === "Last 90 days") return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 90);
+    if (range === "This year") return new Date(now.getFullYear(), 0, 1);
+    return null;
+  };
+  const inDateRange = (dateValue) => {
+    const startDate = dateRangeStart(dateRange);
+    if (!startDate) return true;
+    const date = new Date(dateValue || 0);
+    return !Number.isNaN(date.getTime()) && date >= startDate && date <= now;
+  };
+  const filteredBookings = bookings.filter(
     (booking) =>
-      (branch === "All branches" || booking.branch === branch) &&
+      inDateRange(booking.pickupDate) &&
+      (branch === "All branches" || booking.branch === branch || booking.returnBranch === branch) &&
       (status === "All statuses" || booking.status === status),
   );
-  const reportRows = (title) => {
-    if (title === "Booking report") return visibleBookings.map((booking) => ({ reference: booking.reference, status: booking.status, branch: booking.branch, total: booking.total }));
-    if (title === "Revenue report") return visibleBookings.map((booking) => ({ reference: booking.reference, subtotal: booking.subtotal || booking.total - (booking.deposit || 0), tax: booking.tax || "", total: booking.total }));
-    if (title === "Customer report") return customers.map((customer) => ({ customer: customer.name, email: customer.email, status: customer.status, bookings: bookings.filter((booking) => booking.customerId === customer.id).length }));
-    if (title === "Vehicle usage report") return vehicles.map((vehicle) => ({ vehicle: vehicle.name, category: vehicle.category, branch: vehicle.branch, status: vehicle.status }));
-    return payments.map((payment) => ({ transaction: payment.transaction, booking: payment.booking, amount: payment.amount, status: payment.status, date: payment.date }));
-  };
+  const filteredBookingIds = new Set(filteredBookings.map((booking) => booking.reference));
+  const filteredPayments = payments.filter(
+    (payment) =>
+      filteredBookingIds.has(payment.booking) ||
+      (dateRange === "All time" && status === "All statuses" && branch === "All branches"),
+  );
+  const filteredCustomers = customers.filter((customer) =>
+    filteredBookings.some((booking) => booking.customerId === customer.id),
+  );
+  const activeCustomers = customers.filter((customer) => customer.status === "Active").length;
+  const totalRevenue = filteredBookings
+    .filter((booking) => booking.paymentStatus === "Paid" || booking.status === "Completed")
+    .reduce((sum, booking) => sum + Number(booking.total || 0), 0);
+  const utilization = vehicles.length
+    ? Math.round((vehicles.filter((vehicle) => vehicle.status === "Rented").length / vehicles.length) * 100)
+    : 0;
+  const bookingCountByStatus = (label) =>
+    filteredBookings.filter((booking) => booking.status === label || booking.paymentStatus === label).length;
+  const paymentAmountBy = (labels) =>
+    filteredPayments
+      .filter((payment) => labels.includes(payment.status))
+      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const vehicleRentalDays = (vehicleId) =>
+    filteredBookings
+      .filter((booking) => booking.vehicleId === vehicleId)
+      .reduce((sum, booking) => sum + Number(booking.days || 0), 0);
+  const customerBookings = (customerId) => bookings.filter((booking) => booking.customerId === customerId);
+  const bookingRows = filteredBookings.map((booking) => {
+    const customer = customers.find((item) => item.id === booking.customerId);
+    const vehicle = vehicles.find((item) => item.id === booking.vehicleId);
+    return {
+      "Booking ID": booking.reference,
+      Customer: customer?.name || "Guest Customer",
+      Vehicle: vehicle?.name || "Unknown vehicle",
+      "Pickup Date": booking.pickupDate,
+      "Return Date": booking.returnDate,
+      "Pickup Branch": booking.branch,
+      "Return Branch": booking.returnBranch || booking.branch,
+      Status: booking.status,
+      Amount: booking.total,
+    };
+  });
+  const revenueRows = filteredBookings.map((booking) => {
+    const customer = customers.find((item) => item.id === booking.customerId);
+    const vehicle = vehicles.find((item) => item.id === booking.vehicleId);
+    const payment = payments.find((item) => item.booking === booking.reference);
+    return {
+      "Booking ID": booking.reference,
+      Customer: customer?.name || payment?.customer || "Guest Customer",
+      Vehicle: vehicle?.name || "Unknown vehicle",
+      "Payment Status": payment?.status || booking.paymentStatus || "No data available",
+      "Payment Date": payment?.date || "No data available",
+      Amount: payment?.amount || booking.total || "No data available",
+      "Payment Method": payment?.method || booking.paymentMethod || "No data available",
+    };
+  });
+  const customerRows = (filteredCustomers.length ? filteredCustomers : customers).map((customer) => ({
+    "Customer Name": customer.name,
+    Email: customer.email,
+    Phone: customer.phone || "",
+    "Account Status": customer.status || "",
+    Bookings: customerBookings(customer.id).length,
+  }));
+  const vehicleRows = vehicles.map((vehicle) => ({
+    Vehicle: vehicle.name,
+    "Vehicle Type": vehicle.category,
+    Branch: vehicle.branch,
+    Status: vehicle.status,
+    Bookings: filteredBookings.filter((booking) => booking.vehicleId === vehicle.id).length,
+    "Rental Days": vehicleRentalDays(vehicle.id),
+    "Current Kilometres": vehicle.currentKilometres || "",
+  }));
+  const paymentRows = filteredPayments.map((payment) => ({
+    "Payment ID": payment.transaction,
+    Booking: payment.booking,
+    Customer: payment.customer,
+    Amount: payment.amount,
+    Method: payment.method || "No data available",
+    Gateway: payment.gateway || "No data available",
+    Status: payment.status,
+    Date: payment.date || "No data available",
+  }));
+  const reports = [
+    {
+      title: "Booking Report",
+      description: "Reservations, statuses and branch activity",
+      icon: Icons.CalendarDays,
+      filename: "rentivo-booking-report.csv",
+      rows: bookingRows,
+      metrics: [
+        ["Total bookings", filteredBookings.length],
+        ["Confirmed", bookingCountByStatus("Upcoming") + bookingCountByStatus("Active")],
+        ["Completed", bookingCountByStatus("Completed")],
+        ["Cancelled", bookingCountByStatus("Cancelled")],
+        ["Pending", bookingCountByStatus("Pending")],
+      ],
+    },
+    {
+      title: "Revenue Report",
+      description: "Paid, pending and refunded payment totals",
+      icon: Icons.IndianRupee,
+      filename: "rentivo-revenue-report.csv",
+      rows: revenueRows,
+      metrics: [
+        ["Total revenue", INR(totalRevenue)],
+        ["Paid / captured", INR(paymentAmountBy(["Paid", "Captured"]))],
+        ["Pending", INR(paymentAmountBy(["Pending"]))],
+        ["Refunded", INR(paymentAmountBy(["Refunded"]))],
+      ],
+    },
+    {
+      title: "Customer Report",
+      description: "Safe customer account and booking counts",
+      icon: Icons.Users,
+      filename: "rentivo-customer-report.csv",
+      rows: customerRows,
+      metrics: [
+        ["Total customers", customers.length],
+        ["Active customers", activeCustomers],
+        ["Customers in filters", filteredCustomers.length || "No data available"],
+        ["Returning customers", customers.filter((customer) => customerBookings(customer.id).length > 1).length],
+      ],
+    },
+    {
+      title: "Vehicle Usage Report",
+      description: "Fleet status, booking count and rental days",
+      icon: Icons.CarFront,
+      filename: "rentivo-vehicle-usage-report.csv",
+      rows: vehicleRows,
+      metrics: [
+        ["Total vehicles", vehicles.length],
+        ["Available", vehicles.filter((vehicle) => vehicle.status === "Available").length],
+        ["Rented", vehicles.filter((vehicle) => vehicle.status === "Rented").length],
+        ["Maintenance", vehicles.filter((vehicle) => vehicle.status === "Maintenance").length],
+      ],
+    },
+    {
+      title: "Payment Report",
+      description: "Payment records from the current filtered bookings",
+      icon: Icons.CreditCard,
+      filename: "rentivo-payment-report.csv",
+      rows: paymentRows,
+      metrics: [
+        ["Total payments", filteredPayments.length],
+        ["Successful", filteredPayments.filter((payment) => ["Paid", "Captured"].includes(payment.status)).length],
+        ["Pending", filteredPayments.filter((payment) => payment.status === "Pending").length],
+        ["Refunded", filteredPayments.filter((payment) => payment.status === "Refunded").length],
+      ],
+    },
+  ];
+
   return (
-    <AdminPage
-      title="Reports"
-      subtitle="Export a clear view of performance across your branches."
-    >
+    <AdminPage title="Reports" subtitle="Export a clear view of performance across your branches.">
       <div className="report-filters">
         <label className="field">
           <span>Date range</span>
-          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option>Last 30 days</option>
-            <option>This quarter</option>
-            <option>This year</option>
+          <select value={dateRange} onChange={(e) => setDateRange(e.target.value)}>
+            {['Last 7 days', 'Last 30 days', 'Last 90 days', 'This year', 'All time'].map((option) => <option key={option}>{option}</option>)}
           </select>
         </label>
         <label className="field">
           <span>Branch</span>
           <select value={branch} onChange={(e) => setBranch(e.target.value)}>
             <option>All branches</option>
-            {branches.map((b) => (
-              <option key={b.id}>{b.name}</option>
-            ))}
+            {branches.map((item) => <option key={item.id}>{item.name}</option>)}
           </select>
         </label>
         <label className="field">
           <span>Booking status</span>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option>All statuses</option>
-            <option>Upcoming</option>
-            <option>Active</option>
-            <option>Completed</option>
-            <option>Cancelled</option>
+            {bookingStatuses.map((option) => <option key={option}>{option}</option>)}
           </select>
         </label>
       </div>
-      <div className="report-grid">
-        {[
-          [
-            "Booking report",
-            "Reservations, statuses and branch activity",
-            Icons.CalendarDays,
-          ],
-          [
-            "Revenue report",
-            "Rental, tax and deposit collections",
-            Icons.IndianRupee,
-          ],
-          [
-            "Customer report",
-            "New, active and returning customers",
-            Icons.Users,
-          ],
-          [
-            "Vehicle usage report",
-            "Fleet utilization and rental days",
-            Icons.CarFront,
-          ],
-          [
-            "Payment report",
-            "Razorpay transaction reconciliation",
-            Icons.CreditCard,
-          ],
-        ].map(([t, d, I]) => (
-          <article key={t}>
-            <I />
-            <h3>{t}</h3>
-            <p>{d}</p>
-            <Button
-              variant="secondary"
-              className="full"
-              onClick={() => downloadCsv(`${t.toLowerCase().replaceAll(" ", "-")}-${filter.toLowerCase().replaceAll(" ", "-")}.csv`, reportRows(t))}
-            >
+      <div className="report-summary metrics">
+        <Metric label="Total bookings" value={filteredBookings.length} change={dateRange.toLowerCase()} icon={Icons.CalendarDays} />
+        <Metric label="Total revenue" value={INR(totalRevenue)} change="filtered bookings" icon={Icons.IndianRupee} />
+        <Metric label="Active customers" value={activeCustomers} change="all customers" icon={Icons.Users} />
+        <Metric label="Vehicle utilization" value={utilization + "%"} change="current fleet" icon={Icons.CarFront} />
+      </div>
+      {!filteredBookings.length && (
+        <EmptyState title="No report data matches the selected filters." text="Try a wider date range, branch, or booking status." />
+      )}
+      <div className="report-grid reports-balanced">
+        {reports.map(({ title, description, icon: Icon, filename, rows, metrics }) => (
+          <article key={title}>
+            <div className="report-card-head">
+              <Icon />
+              <div>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </div>
+            </div>
+            <div className="report-metrics">
+              {metrics.map(([label, value]) => (
+                <p key={label}>
+                  <span>{label}</span>
+                  <b>{value}</b>
+                </p>
+              ))}
+            </div>
+            {!rows.length && <p className="empty-note">No data available</p>}
+            <Button variant="secondary" className="full" onClick={() => downloadCsv(filename, rows)}>
               <Icons.Download size={15} /> Export CSV
             </Button>
           </article>
@@ -2368,21 +3051,21 @@ function Settings() {
             defaultValue={settings.defaultSecurityDeposit}
             type="number"
           />
-          <label className="check-row">
+          <label className="check-row settings-check-row">
             <input
               type="checkbox"
               name="requireLicenceBeforeConfirmation"
               defaultChecked={settings.requireLicenceBeforeConfirmation}
-            />{" "}
-            Require licence before confirmation
+            />
+            <span>Require licence before confirmation</span>
           </label>
-          <label className="check-row">
+          <label className="check-row settings-check-row">
             <input
               type="checkbox"
               name="sendBookingNotifications"
               defaultChecked={settings.sendBookingNotifications}
-            />{" "}
-            Send booking notifications
+            />
+            <span>Send booking notifications</span>
           </label>
           <Button type="submit">Update defaults</Button>
         </form>
@@ -2393,6 +3076,19 @@ function Settings() {
 }
 function CustomerDashboard() {
   const { user, bookings, customers } = useApp();
+  const location = useLocation();
+  const nav = useNavigate();
+  const [showNewCustomerWelcome, setShowNewCustomerWelcome] = useState(false);
+
+  useEffect(() => {
+    if (!user?.email) return;
+    const welcomeEmail = window.sessionStorage.getItem(REGISTRATION_WELCOME_KEY);
+    if (welcomeEmail && welcomeEmail === user.email.toLowerCase()) {
+      setShowNewCustomerWelcome(true);
+      window.sessionStorage.removeItem(REGISTRATION_WELCOME_KEY);
+      nav(location.pathname, { replace: true, state: {} });
+    }
+  }, [user?.email, nav, location.pathname]);
   const c =
     customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
     customers.find((customer) => customer.id === user?.id) ||
@@ -2448,7 +3144,7 @@ function CustomerDashboard() {
           <div className="avatar">{initials}</div>
           <div>
             <p className="eyebrow blue">CUSTOMER DASHBOARD</p>
-            <h1>Welcome back, {customerFirstName}!</h1>
+            <h1>{showNewCustomerWelcome ? "Welcome" : "Welcome back"}, {customerFirstName}!</h1>
             <p>
               Manage your active rentals, view trip history, and reserve your
               next drive.
@@ -2554,6 +3250,9 @@ function CustomerDashboard() {
                 <Link className="btn secondary full" to="/profile">
                   <Icons.User size={16} /> Edit profile
                 </Link>
+                <Link className="btn secondary full" to="/profile#identity-verification">
+                  <Icons.ShieldCheck size={16} /> Identity verification
+                </Link>
               </div>
             </section>
 
@@ -2581,6 +3280,18 @@ function CustomerDashboard() {
                 <p>
                   <span>Phone</span>
                   <b>{c?.phone || user?.phone || "Not provided"}</b>
+                </p>
+                <p>
+                  <span>Identity status</span>
+                  <StatusBadge>{identityStatusLabel(getIdentityVerification(c).status)}</StatusBadge>
+                </p>
+                <p>
+                  <span>Aadhaar / National ID</span>
+                  <b>{identityStatusLabel(getIdentityVerification(c).aadhaar.status)}</b>
+                </p>
+                <p>
+                  <span>Driving Licence</span>
+                  <b>{identityStatusLabel(getIdentityVerification(c).drivingLicence.status)}</b>
                 </p>
                 <p>
                   <span>Licence</span>
@@ -2617,11 +3328,50 @@ function RequireAdmin({ children }) {
     <Navigate to="/login" replace />
   );
 }
-function App() {
+function LogoutDialog({ open, onOk }) {
+  const okRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    okRef.current?.focus();
+    const handleKey = (event) => {
+      if (event.key === "Escape") onOk();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [open, onOk]);
+
+  if (!open) return null;
+
   return (
-    <AppProvider>
-      <BrowserRouter>
-        <Routes>
+    <div className="modal-backdrop logout-backdrop" role="presentation">
+      <section className="modal logout-modal" role="dialog" aria-modal="true" aria-labelledby="logout-title">
+        <Icons.CheckCircle size={42} aria-hidden="true" />
+        <h2 id="logout-title">You have been logged out!</h2>
+        <button ref={okRef} className="btn" type="button" onClick={onOk}>OK</button>
+      </section>
+    </div>
+  );
+}
+
+function AppRoutes() {
+  const nav = useNavigate();
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+
+  useEffect(() => {
+    const handleLoggedOut = () => setLogoutDialogOpen(true);
+    window.addEventListener("rentivo:logged-out", handleLoggedOut);
+    return () => window.removeEventListener("rentivo:logged-out", handleLoggedOut);
+  }, []);
+
+  const closeLogoutDialog = () => {
+    setLogoutDialogOpen(false);
+    nav("/login", { replace: true });
+  };
+
+  return (
+    <>
+      <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/cars" element={<Cars />} />
           <Route path="/cars/:id" element={<VehicleDetails />} />
@@ -2743,7 +3493,17 @@ function App() {
             }
           />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      </Routes>
+      <LogoutDialog open={logoutDialogOpen} onOk={closeLogoutDialog} />
+    </>
+  );
+}
+
+function App() {
+  return (
+    <AppProvider>
+      <BrowserRouter>
+        <AppRoutes />
       </BrowserRouter>
     </AppProvider>
   );
