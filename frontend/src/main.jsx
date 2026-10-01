@@ -1197,9 +1197,9 @@ function Confirmation() {
   );
 }
 
-function Auth({ register = false }) {
+function Auth({ isRegistering = false }) {
   const nav = useNavigate(),
-    { login, customers } = useApp(),
+    { login, register, customers } = useApp(),
     [errors, setErrors] = useState({}),
     [resetMessage, setResetMessage] = useState(""),
     [roleMode, setRoleMode] = useState("customer"),
@@ -1234,11 +1234,11 @@ function Auth({ register = false }) {
 
     if (!password) {
       newErrors.password = "Password is required.";
-    } else if (register && password.length < 8) {
+    } else if (isRegistering && password.length < 8) {
       newErrors.password = "Password must be at least 8 characters.";
     }
 
-    if (register) {
+    if (isRegistering) {
       const firstName = String(fd.get("firstName") || "").trim();
       const lastName = String(fd.get("lastName") || "").trim();
       const phone = String(fd.get("phone") || "").trim();
@@ -1278,7 +1278,7 @@ function Auth({ register = false }) {
     }
 
     try {
-      if (!register && roleMode === "admin") {
+      if (!isRegistering && roleMode === "admin") {
         await login({
           firstName: fd.get("firstName") || "Admin",
           lastName: fd.get("lastName") || "Manager",
@@ -1288,7 +1288,7 @@ function Auth({ register = false }) {
           role: "admin",
         });
         nav("/admin");
-      } else if (!register) {
+      } else if (!isRegistering) {
         await login({
           email: emailInput.toLowerCase(),
           password: password || "Customer@123",
@@ -1318,13 +1318,13 @@ function Auth({ register = false }) {
           <Link className="brand center-brand" to="/">
             <span>R</span> Rentivo
           </Link>
-          <h1>{register ? "Create your account" : "Welcome back"}</h1>
+          <h1>{isRegistering ? "Create your account" : "Welcome back"}</h1>
           <p>
-            {register
+            {isRegistering
               ? "Start booking exceptional journeys."
               : "Sign in to manage your rentals."}
           </p>
-          {!register && (
+          {!isRegistering && (
             <div style={{ display: "flex", gap: "8px", marginBottom: "16px", justifyContent: "center" }}>
               <button
                 type="button"
@@ -1342,7 +1342,7 @@ function Auth({ register = false }) {
               </button>
             </div>
           )}
-          {register && (
+          {isRegistering && (
             <div className="two-col">
               <FormInput name="firstName" label="First name" error={errors.firstName} />
               <FormInput name="lastName" label="Last name" error={errors.lastName} />
@@ -1359,7 +1359,7 @@ function Auth({ register = false }) {
             }}
             error={errors.email}
           />
-          {register && (
+          {isRegistering && (
             <FormInput name="phone" label="Phone number" type="tel" error={errors.phone} />
           )}
           <FormInput
@@ -1368,7 +1368,7 @@ function Auth({ register = false }) {
             type="password"
             error={errors.password}
           />
-          {register && (
+          {isRegistering && (
             <FormInput
               name="confirm"
               label="Confirm password"
@@ -1376,7 +1376,7 @@ function Auth({ register = false }) {
               error={errors.confirm}
             />
           )}
-          {!register && (
+          {!isRegistering && (
             <div className="check-row">
               <label>
                 <input type="checkbox" /> Remember me
@@ -1392,7 +1392,7 @@ function Auth({ register = false }) {
               </a>
             </div>
           )}
-          {register && (
+          {isRegistering && (
             <div className="terms-field">
               <label className="check-row">
                 <input
@@ -1412,12 +1412,12 @@ function Auth({ register = false }) {
           )}
           {resetMessage && <p className="green">{resetMessage}</p>}
           <Button className="full">
-            {register ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
+            {isRegistering ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
           </Button>
           <p className="auth-switch">
-            {register ? "Already have an account? " : "New to Rentivo? "}
-            <Link to={register ? "/login" : "/register"}>
-              {register ? "Login" : "Register"}
+            {isRegistering ? "Already have an account? " : "New to Rentivo? "}
+            <Link to={isRegistering ? "/login" : "/register"}>
+              {isRegistering ? "Login" : "Register"}
             </Link>
           </p>
         </form>
@@ -3374,7 +3374,7 @@ function AppRoutes() {
           <Route path="/payment" element={<Payment />} />
           <Route path="/booking-confirmation" element={<Confirmation />} />
           <Route path="/login" element={<Auth />} />
-          <Route path="/register" element={<Auth register />} />
+          <Route path="/register" element={<Auth isRegistering />} />
           <Route
             path="/dashboard"
             element={

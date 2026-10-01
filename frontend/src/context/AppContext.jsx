@@ -265,7 +265,6 @@ export function AppProvider({ children }) {
 
   const login = async (payload = {}) => {
     try {
-      // Attempt backend login
       const response = await authApi.login({
         email: payload.email,
         password: payload.password || (payload.role === 'admin' ? 'Admin@123' : 'Customer@123')
@@ -273,50 +272,28 @@ export function AppProvider({ children }) {
 
       if (response?.data?.token) {
         const { token, user } = response.data;
+
         const completeUser = {
           ...user,
           identityVerification: normalizeIdentityVerification(
             payload.identityVerification || user.identityVerification
           )
         };
+
         setState(prev => ({
           ...prev,
           token,
           user: completeUser
         }));
+
         return { success: true, user: completeUser };
       }
+
+      throw new Error('Invalid login response from server.');
     } catch (apiErr) {
-      console.warn('Backend login fallback:', apiErr.message);
+      console.error('Login failed:', apiErr.message);
+      throw apiErr;
     }
-
-    // Local Fallback if backend offline or special override
-    const normalizedEmail = String(payload.email || "").toLowerCase();
-    const isSpecialAdmin = normalizedEmail === DEMO_ADMIN_EMAIL.toLowerCase();
-    const role = payload.role || (isSpecialAdmin ? "admin" : "customer");
-
-    const derivedName = normalizedEmail ? normalizedEmail.split("@")[0] : "Customer";
-    const user = {
-      id: isSpecialAdmin ? 1 : Date.now(),
-      role,
-      name: `${payload.firstName || (role === 'admin' ? 'Admin' : 'Customer')} ${payload.lastName || ''}`.trim() || derivedName,
-      firstName: payload.firstName || (role === 'admin' ? 'Admin' : 'Customer'),
-      lastName: payload.lastName || '',
-      email: payload.email || '',
-      phone: payload.phone || '+91 98452 18203',
-      licence: payload.licence || 'KA01 20150012345',
-      address: payload.address || 'Bengaluru, Karnataka',
-      demoAuthPassword: payload.password || (isSpecialAdmin ? DEMO_ADMIN_PASSWORD : "password123"),
-      identityVerification: normalizeIdentityVerification(
-        payload.identityVerification
-      )
-    };
-
-    setState(prev => ({
-      ...prev,
-      user
-    }));
-    return { success: true, user };
   };
 
   const register = async (payload = {}) => {
