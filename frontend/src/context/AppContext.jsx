@@ -20,13 +20,14 @@ import {
   branchesApi,
   bookingsApi,
   paymentsApi,
-  adminApi
+  adminApi,
+  kycApi
 } from "../services/api";
 
-export const DEMO_ADMIN_EMAIL = "admin@rentivo.in";
-export const DEMO_ADMIN_PASSWORD = "password123";
+export const DEMO_ADMIN_EMAIL = import.meta.env.VITE_DEMO_ADMIN_EMAIL || 'admin@rentivo.in';
+export const DEMO_USER_EMAIL = import.meta.env.VITE_DEMO_USER_EMAIL || 'user@rentivo.in';
 
-const STORAGE_KEY = "rentivo-app-state-v1";
+const STORAGE_KEY = "rentivo-app-state-v2";
 const TOKEN_KEY = "rentivo_jwt_token";
 
 const seedSettings = {
@@ -56,7 +57,7 @@ export const defaultIdentityVerification = () => ({
     dateOfBirth: "",
     expiryDate: "",
   },
-  provider: null,
+  provider: "DIDIT",
   sessionId: null,
   verifiedAt: null,
 });
@@ -87,8 +88,6 @@ const hydrateCustomers = (value) =>
     );
     return {
       ...customer,
-      demoAuthPassword:
-        customer.demoAuthPassword || seededCustomer?.demoAuthPassword || "",
       identityVerification: normalizeIdentityVerification(
         customer.identityVerification || seededCustomer?.identityVerification,
       ),
@@ -243,12 +242,15 @@ export function AppProvider({ children }) {
         if (token) {
           const meRes = await authApi.getCurrentUser().catch(() => null);
           if (meRes?.data?.user) {
+            const fetchedUser = meRes.data.user;
+            const normalizedRole = String(fetchedUser.role || (fetchedUser.email === DEMO_ADMIN_EMAIL ? 'admin' : 'customer')).toLowerCase();
             setState(prev => ({
               ...prev,
               user: {
-                ...meRes.data.user,
+                ...fetchedUser,
+                role: normalizedRole,
                 identityVerification: normalizeIdentityVerification(
-                  prev.user?.identityVerification || meRes.data.user?.identityVerification
+                  prev.user?.identityVerification || fetchedUser.identityVerification
                 )
               },
               token
@@ -268,7 +270,7 @@ export function AppProvider({ children }) {
       // Attempt backend login
       const response = await authApi.login({
         email: payload.email,
-        password: payload.password || (payload.role === 'admin' ? 'Admin@123' : 'Customer@123')
+        password: payload.password
       });
 
       if (response?.data?.token) {
@@ -276,7 +278,10 @@ export function AppProvider({ children }) {
         const completeUser = {
           ...user,
           identityVerification: normalizeIdentityVerification(
-            payload.identityVerification || user.identityVerification
+            payload.identityVerification || user.identityVerification || {
+              status: user.kyc_status === 'VERIFIED' ? 'verified' : 'not_started',
+              provider: 'DIDIT'
+            }
           )
         };
         setState(prev => ({
@@ -287,28 +292,28 @@ export function AppProvider({ children }) {
         return { success: true, user: completeUser };
       }
     } catch (apiErr) {
-      console.warn('Backend login fallback:', apiErr.message);
+      console.warn('Backend login attempt notice:', apiErr.message);
+      throw apiErr;
     }
 
-    // Local Fallback if backend offline or special override
+    // Local Fallback if offline
     const normalizedEmail = String(payload.email || "").toLowerCase();
     const isSpecialAdmin = normalizedEmail === DEMO_ADMIN_EMAIL.toLowerCase();
     const role = payload.role || (isSpecialAdmin ? "admin" : "customer");
 
     const derivedName = normalizedEmail ? normalizedEmail.split("@")[0] : "Customer";
     const user = {
-      id: isSpecialAdmin ? 1 : Date.now(),
+      id: isSpecialAdmin ? 1 : 2,
       role,
-      name: `${payload.firstName || (role === 'admin' ? 'Admin' : 'Customer')} ${payload.lastName || ''}`.trim() || derivedName,
-      firstName: payload.firstName || (role === 'admin' ? 'Admin' : 'Customer'),
-      lastName: payload.lastName || '',
+      name: `${payload.firstName || (role === 'admin' ? 'Admin' : 'Demo')} ${payload.lastName || (role === 'admin' ? 'Manager' : 'User')}`.trim() || derivedName,
+      firstName: payload.firstName || (role === 'admin' ? 'Admin' : 'Demo'),
+      lastName: payload.lastName || (role === 'admin' ? 'Manager' : 'User'),
       email: payload.email || '',
       phone: payload.phone || '+91 98452 18203',
       licence: payload.licence || 'KA01 20150012345',
       address: payload.address || 'Bengaluru, Karnataka',
-      demoAuthPassword: payload.password || (isSpecialAdmin ? DEMO_ADMIN_PASSWORD : "password123"),
       identityVerification: normalizeIdentityVerification(
-        payload.identityVerification
+        payload.identityVerification || { status: 'not_started', provider: 'DIDIT' }
       )
     };
 
@@ -323,7 +328,7 @@ export function AppProvider({ children }) {
     try {
       const response = await authApi.register({
         email: payload.email,
-        password: payload.password || 'Customer@123',
+        password: payload.password,
         firstName: payload.firstName,
         lastName: payload.lastName,
         phone: payload.phone,
@@ -346,7 +351,8 @@ export function AppProvider({ children }) {
         return { success: true, user: completeUser };
       }
     } catch (apiErr) {
-      console.warn('Backend registration fallback:', apiErr.message);
+      console.warn('Backend registration notice:', apiErr.message);
+      throw apiErr;
     }
 
     return login(payload);
@@ -439,6 +445,119 @@ export function AppProvider({ children }) {
     });
   };
 
+  // DIDIT KYC Flow Helper
+  const initiateDiditKyc = async () => {
+    try {
+      const response = await kycApi.createSession({
+        callbackUrl: window.location.origin + '/profile?kyc=callback'
+      });
+      return response.data;
+    } catch (err) {
+      console.warn('Didit session creation notice:', err.message);
+      return {
+        sessionId: `didit_sess_local_${Date.now()}`,
+        url: window.location.origin + '/profile?kyc_demo=true',
+        mode: 'sandbox'
+      };
+    }
+  };
+
+  const verifyDiditKyc = async (verificationData = {}) => {
+    // Make call to backend KYC verification
+    const response = await kycApi.verify(verificationData);
+
+    const cleanAadhaar = String(verificationData.aadhaarNumber || '').replace(/[\s-]/g, '');
+    const cleanDl = String(verificationData.drivingLicenseNo || '').replace(/[\s-]/g, '').toUpperCase();
+    const maskedAadhaar = cleanAadhaar ? `XXXX XXXX ${cleanAadhaar.slice(-4)}` : 'XXXX XXXX 1012';
+    const maskedDl = cleanDl ? `XXXX XXXX ${cleanDl.slice(-4)}` : 'XXXX XXXX 2345';
+
+    await updateProfile({
+      drivingLicenseNo: cleanDl || state.user?.drivingLicenseNo,
+      aadhaarNumber: cleanAadhaar || state.user?.aadhaarNumber,
+      phone: verificationData.phone || state.user?.phone,
+      identityVerification: {
+        status: 'verified',
+        provider: 'DIDIT',
+        sessionId: verificationData.sessionId || `didit_inportal_${Date.now()}`,
+        verifiedAt: new Date().toISOString(),
+        aadhaar: {
+          status: 'added',
+          maskedNumber: maskedAadhaar
+        },
+        drivingLicence: {
+          status: 'added',
+          licenceNumberMasked: maskedDl,
+          dateOfBirth: verificationData.dateOfBirth || state.user?.identityVerification?.drivingLicence?.dateOfBirth || '1996-05-14',
+          expiryDate: verificationData.expiryDate || state.user?.identityVerification?.drivingLicence?.expiryDate || '2034-05-14'
+        }
+      }
+    });
+
+    return response?.data || { isVerified: true };
+  };
+
+  const verifyKycWithImages = async ({ frontFile, backFile }) => {
+    const formData = new FormData();
+    formData.append('front_image', frontFile);
+    if (backFile) formData.append('back_image', backFile);
+
+    const response = await kycApi.verifyWithImages(formData);
+
+    await updateProfile({
+      identityVerification: {
+        status: 'verified',
+        provider: 'DIDIT',
+        sessionId: `didit_img_${Date.now()}`,
+        verifiedAt: new Date().toISOString(),
+        aadhaar: { status: 'added', maskedNumber: 'XXXX XXXX (scanned)' },
+        drivingLicence: { status: 'added', licenceNumberMasked: 'XXXX XXXX (scanned)', dateOfBirth: '', expiryDate: '' }
+      }
+    });
+
+    return response?.data || { isVerified: true };
+  };
+
+  const resetDiditKyc = async () => {
+    try {
+      await kycApi.reset();
+    } catch (e) {
+      console.warn('API reset KYC note:', e.message);
+    }
+
+    const clearedIdentity = defaultIdentityVerification();
+
+    setState(previous => {
+      if (!previous.user) return previous;
+      const user = {
+        ...previous.user,
+        drivingLicenseNo: '',
+        aadhaarNumber: '',
+        kyc_status: 'NOT_STARTED',
+        identityVerification: clearedIdentity
+      };
+
+      const customers = previous.customers.map(c =>
+        c.id === user.id || c.email === user.email
+          ? {
+              ...c,
+              drivingLicenseNo: '',
+              aadhaarNumber: '',
+              kyc_status: 'NOT_STARTED',
+              identityVerification: clearedIdentity
+            }
+          : c
+      );
+
+      return {
+        ...previous,
+        user,
+        customers
+      };
+    });
+
+    return { success: true };
+  };
+
   const logout = () => {
     try {
       window.localStorage.removeItem(TOKEN_KEY);
@@ -465,6 +584,10 @@ export function AppProvider({ children }) {
       logout,
       createBooking,
       updateProfile,
+      initiateDiditKyc,
+      verifyDiditKyc,
+      verifyKycWithImages,
+      resetDiditKyc,
       setUser: (v) => updateKey("user", v),
       setVehicles: (v) => updateKey("vehicles", v),
       setCategories: (v) => updateKey("categories", v),

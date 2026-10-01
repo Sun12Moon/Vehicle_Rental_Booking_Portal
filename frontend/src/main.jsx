@@ -17,13 +17,15 @@ import {
   useParams,
 } from "react-router-dom";
 import * as Icons from "lucide-react";
+import { DiditSdk } from "@didit-protocol/sdk-web";
 import {
   AppProvider,
   useApp,
   DEMO_ADMIN_EMAIL,
-  DEMO_ADMIN_PASSWORD,
+  DEMO_USER_EMAIL,
   normalizeIdentityVerification,
 } from "./context/AppContext";
+import { kycApi } from "./services/api";
 import "./styles.css";
 const INR = (n) =>
   new Intl.NumberFormat("en-IN", {
@@ -83,6 +85,65 @@ const maskAadhaar = (value) => "XXXX XXXX " + String(value).slice(-4);
 const maskLicence = (value) => {
   const compact = String(value).replace(/\s+/g, "").toUpperCase();
   return "X".repeat(Math.max(0, compact.length - 4)) + compact.slice(-4);
+};
+
+const dTableClient = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+  [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+  [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+  [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+  [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+];
+const pTableClient = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+  [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+  [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+  [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+];
+const validateAadhaarClient = (aadhaar) => {
+  if (!aadhaar) return { valid: false, error: "Aadhaar number is required." };
+  const clean = String(aadhaar).replace(/[\s-]/g, "");
+  if (!/^\d{12}$/.test(clean)) return { valid: false, error: "Enter exactly 12 numeric digits with no spaces or letters." };
+  if (clean[0] === '0' || clean[0] === '1') return { valid: false, error: "Invalid Aadhaar: UIDAI numbers cannot begin with 0 or 1." };
+  if (new Set(clean).size === 1) return { valid: false, error: "Invalid Aadhaar: Dummy sequence with identical repeating digits detected." };
+  const knownDummies = ["123456789012", "987654321012", "112233445566", "987654321098"];
+  if (knownDummies.includes(clean)) return { valid: false, error: "Invalid Aadhaar: Dummy placeholder Aadhaar number detected." };
+  let c = 0;
+  const inverted = clean.split("").map(Number).reverse();
+  for (let i = 0; i < inverted.length; i++) {
+    c = dTableClient[c][pTableClient[i % 8][inverted[i]]];
+  }
+  if (c !== 0) return { valid: false, error: "Invalid Aadhaar: Checksum verification failed. Please enter a genuine UIDAI Aadhaar number." };
+  return { valid: true, clean };
+};
+
+const validateDrivingLicenseClient = (dl) => {
+  if (!dl) return { valid: false, error: "Driving licence number is required." };
+  const clean = String(dl).replace(/[\s-]/g, "").toUpperCase();
+  if (clean.length < 10 || clean.length > 20) return { valid: false, error: "Driving licence must be 10-20 alphanumeric characters." };
+  const validStates = ["AN","AP","AR","AS","BR","CG","CH","DD","DL","DN","GA","GJ","HP","HR","JH","JK","KA","KL","LA","LD","MH","ML","MN","MP","MZ","NL","OD","PB","PY","RJ","SK","TN","TR","TS","UK","UP","WB"];
+  const state = clean.slice(0, 2);
+  if (!validStates.includes(state)) return { valid: false, error: `Invalid Driving Licence: "${state}" is not a recognized Indian State/UT code.` };
+  const remainder = clean.slice(2);
+  if (/^0+$/.test(remainder) || remainder.startsWith("0000")) return { valid: false, error: "Invalid Driving Licence: Dummy licence number detected." };
+  return { valid: true, clean };
+};
+
+const validatePhoneClient = (phone) => {
+  if (!phone) return { valid: false, error: "Aadhaar-linked phone number is required." };
+  const clean = String(phone).replace(/[\s-+]/g, "").replace(/^91/, "");
+  if (!/^[6-9]\d{9}$/.test(clean)) return { valid: false, error: "Enter a valid 10-digit Indian mobile number (e.g. 9876543210)." };
+  if (new Set(clean).size === 1 || clean === "1234567890") return { valid: false, error: "Invalid phone number: Dummy sequence detected." };
+  return { valid: true, clean };
 };
 const isAtLeastAge = (dateValue, age) => {
   const date = new Date(dateValue);
@@ -1197,9 +1258,9 @@ function Confirmation() {
   );
 }
 
-function Auth({ register = false }) {
+function Auth({ register: isRegister = false }) {
   const nav = useNavigate(),
-    { login, customers } = useApp(),
+    { login, register: registerUser, customers } = useApp(),
     [errors, setErrors] = useState({}),
     [resetMessage, setResetMessage] = useState(""),
     [roleMode, setRoleMode] = useState("customer"),
@@ -1211,7 +1272,7 @@ function Auth({ register = false }) {
     if (mode === "admin") {
       setEmail(DEMO_ADMIN_EMAIL);
     } else {
-      setEmail("");
+      setEmail(DEMO_USER_EMAIL);
     }
   };
 
@@ -1234,11 +1295,11 @@ function Auth({ register = false }) {
 
     if (!password) {
       newErrors.password = "Password is required.";
-    } else if (register && password.length < 8) {
+    } else if (isRegister && password.length < 8) {
       newErrors.password = "Password must be at least 8 characters.";
     }
 
-    if (register) {
+    if (isRegister) {
       const firstName = String(fd.get("firstName") || "").trim();
       const lastName = String(fd.get("lastName") || "").trim();
       const phone = String(fd.get("phone") || "").trim();
@@ -1262,12 +1323,6 @@ function Auth({ register = false }) {
       if (fd.get("terms") !== "on") {
         newErrors.terms = "You must agree to the Terms and Privacy Policy.";
       }
-    } else {
-      if (roleMode === "admin") {
-        if (emailInput.toLowerCase() !== DEMO_ADMIN_EMAIL.toLowerCase()) {
-          newErrors.email = "Unauthorized admin account.";
-        }
-      }
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -1278,30 +1333,30 @@ function Auth({ register = false }) {
     }
 
     try {
-      if (!register && roleMode === "admin") {
+      if (!isRegister && roleMode === "admin") {
         await login({
           firstName: fd.get("firstName") || "Admin",
           lastName: fd.get("lastName") || "Manager",
           email: emailInput.toLowerCase(),
           phone: fd.get("phone") || "+91 99000 00000",
-          password: password || "Admin@123",
+          password: password,
           role: "admin",
         });
         nav("/admin");
-      } else if (!register) {
+      } else if (!isRegister) {
         await login({
           email: emailInput.toLowerCase(),
-          password: password || "Customer@123",
+          password: password,
           role: "customer",
         });
         nav("/dashboard");
       } else {
-        await register({
+        await registerUser({
           firstName: fd.get("firstName").trim(),
           lastName: fd.get("lastName").trim(),
           email: emailInput.toLowerCase(),
           phone: fd.get("phone").trim(),
-          password: password || "Customer@123",
+          password: password,
           role: "customer",
         });
         nav("/dashboard");
@@ -1318,13 +1373,13 @@ function Auth({ register = false }) {
           <Link className="brand center-brand" to="/">
             <span>R</span> Rentivo
           </Link>
-          <h1>{register ? "Create your account" : "Welcome back"}</h1>
+          <h1>{isRegister ? "Create your account" : "Welcome back"}</h1>
           <p>
-            {register
+            {isRegister
               ? "Start booking exceptional journeys."
               : "Sign in to manage your rentals."}
           </p>
-          {!register && (
+          {!isRegister && (
             <div style={{ display: "flex", gap: "8px", marginBottom: "16px", justifyContent: "center" }}>
               <button
                 type="button"
@@ -1342,7 +1397,7 @@ function Auth({ register = false }) {
               </button>
             </div>
           )}
-          {register && (
+          {isRegister && (
             <div className="two-col">
               <FormInput name="firstName" label="First name" error={errors.firstName} />
               <FormInput name="lastName" label="Last name" error={errors.lastName} />
@@ -1359,8 +1414,14 @@ function Auth({ register = false }) {
             }}
             error={errors.email}
           />
-          {register && (
-            <FormInput name="phone" label="Phone number" type="tel" error={errors.phone} />
+          {isRegister && (
+            <FormInput
+              name="phone"
+              label="Aadhaar-linked Phone number"
+              type="tel"
+              placeholder="10-digit Aadhaar-linked mobile (e.g. 9876543210)"
+              error={errors.phone}
+            />
           )}
           <FormInput
             name="password"
@@ -1368,7 +1429,7 @@ function Auth({ register = false }) {
             type="password"
             error={errors.password}
           />
-          {register && (
+          {isRegister && (
             <FormInput
               name="confirm"
               label="Confirm password"
@@ -1376,7 +1437,7 @@ function Auth({ register = false }) {
               error={errors.confirm}
             />
           )}
-          {!register && (
+          {!isRegister && (
             <div className="check-row">
               <label>
                 <input type="checkbox" /> Remember me
@@ -1392,7 +1453,7 @@ function Auth({ register = false }) {
               </a>
             </div>
           )}
-          {register && (
+          {isRegister && (
             <div className="terms-field">
               <label className="check-row">
                 <input
@@ -1412,12 +1473,12 @@ function Auth({ register = false }) {
           )}
           {resetMessage && <p className="green">{resetMessage}</p>}
           <Button className="full">
-            {register ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
+            {isRegister ? "Create account" : roleMode === "admin" ? "Login as Admin" : "Login"}
           </Button>
           <p className="auth-switch">
-            {register ? "Already have an account? " : "New to Rentivo? "}
-            <Link to={register ? "/login" : "/register"}>
-              {register ? "Login" : "Register"}
+            {isRegister ? "Already have an account? " : "New to Rentivo? "}
+            <Link to={isRegister ? "/login" : "/register"}>
+              {isRegister ? "Login" : "Register"}
             </Link>
           </p>
         </form>
@@ -1430,101 +1491,318 @@ function IdentityVerificationPanel({ customer, onSave }) {
   const [aadhaarErrors, setAadhaarErrors] = useState({});
   const [licenceErrors, setLicenceErrors] = useState({});
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState("info");
+  const [diditLoading, setDiditLoading] = useState(false);
+  const [kycPopupLoading, setKycPopupLoading] = useState(false);
+  const pollRef = useRef(null);
+  const { initiateDiditKyc, verifyDiditKyc, verifyKycWithImages, resetDiditKyc, updateProfile, user } = useApp();
+
+  const [aadhaarVal, setAadhaarVal] = useState(customer?.aadhaar_number || customer?.aadhaarNumber || "");
+  const [licenceVal, setLicenceVal] = useState(customer?.driving_license_no || customer?.drivingLicenseNo || customer?.licence || "");
+  const [dobVal, setDobVal] = useState(customer?.date_of_birth || customer?.dateOfBirth || "1996-05-14");
+  const [expiryVal, setExpiryVal] = useState(customer?.license_expiry || customer?.licenseExpiry || "2034-05-14");
+
+  useEffect(() => {
+    if (customer || user) {
+      if (customer?.aadhaar_number || customer?.aadhaarNumber) {
+        setAadhaarVal(customer?.aadhaar_number || customer?.aadhaarNumber);
+      }
+      if (customer?.driving_license_no || customer?.drivingLicenseNo || customer?.licence) {
+        setLicenceVal(customer?.driving_license_no || customer?.drivingLicenseNo || customer?.licence);
+      }
+      if (customer?.date_of_birth || customer?.dateOfBirth) {
+        setDobVal(customer?.date_of_birth || customer?.dateOfBirth);
+      }
+      if (customer?.license_expiry || customer?.licenseExpiry) {
+        setExpiryVal(customer?.license_expiry || customer?.licenseExpiry);
+      }
+    }
+  }, [customer, user]);
+
+  // Handle Didit redirect callback inside popup or main window
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isCallback = params.get("kyc") === "callback" || params.has("verificationSessionId") || params.has("session_id");
+
+    if (isCallback) {
+      // If this is running inside the small popup window, message opener and close
+      if (window.opener && window.opener !== window && !window.opener.closed) {
+        try {
+          window.opener.postMessage({ type: "DIDIT_KYC_COMPLETED" }, "*");
+          window.close();
+          return;
+        } catch (e) {
+          console.warn("Could not postMessage to window.opener:", e);
+        }
+      }
+
+      // If in main window, fetch latest verified status from backend
+      const checkAndComplete = async () => {
+        try {
+          const res = await kycApi.getMyStatus();
+          const statusData = res?.data || res;
+          if (statusData?.isVerified || statusData?.kycStatus === "VERIFIED") {
+            await updateProfile({
+              identityVerification: {
+                status: "verified",
+                provider: statusData.provider || "DIDIT",
+                sessionId: statusData.sessionId || params.get("verificationSessionId") || params.get("session_id"),
+                verifiedAt: statusData.verifiedAt || new Date().toISOString(),
+                aadhaar: {
+                  status: "added",
+                  maskedNumber: statusData.aadhaarMasked || "XXXX XXXX 1012"
+                },
+                drivingLicence: {
+                  status: "added",
+                  licenceNumberMasked: statusData.drivingLicenseNo ? maskLicence(statusData.drivingLicenseNo) : "XXXX XXXX 2345",
+                  dateOfBirth: dobVal || "1996-05-14",
+                  expiryDate: expiryVal || "2034-05-14"
+                }
+              }
+            });
+            setMessage("✓ Identity verified successfully with Didit Protocol!");
+            setMessageType("success");
+          }
+        } catch (err) {
+          console.warn("Auto-check KYC error:", err);
+        }
+      };
+      checkAndComplete();
+    }
+  }, []);
+
+  // Listen for postMessage from popup window
+  useEffect(() => {
+    const handleMessage = async (event) => {
+      if (event.data?.type === "DIDIT_KYC_COMPLETED") {
+        if (pollRef.current) clearInterval(pollRef.current);
+        try {
+          const res = await kycApi.getMyStatus();
+          const statusData = res?.data || res;
+          await updateProfile({
+            identityVerification: {
+              status: "verified",
+              provider: statusData.provider || "DIDIT",
+              sessionId: statusData.sessionId || `didit_sess_${Date.now()}`,
+              verifiedAt: statusData.verifiedAt || new Date().toISOString(),
+              aadhaar: {
+                status: "added",
+                maskedNumber: statusData.aadhaarMasked || "XXXX XXXX 1012"
+              },
+              drivingLicence: {
+                status: "added",
+                licenceNumberMasked: statusData.drivingLicenseNo ? maskLicence(statusData.drivingLicenseNo) : "XXXX XXXX 2345",
+                dateOfBirth: dobVal || "1996-05-14",
+                expiryDate: expiryVal || "2034-05-14"
+              }
+            }
+          });
+          setMessage("✓ Identity verified successfully with Didit Protocol!");
+          setMessageType("success");
+          setKycPopupLoading(false);
+        } catch (err) {
+          console.warn("PostMessage status sync error:", err);
+        }
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [updateProfile, dobVal, expiryVal]);
+
+  // Cleanup polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+
 
   const saveAadhaar = (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const aadhaarNumber = String(new FormData(form).get("aadhaarNumber") || "").trim();
-    const nextErrors = {};
-
-    if (!aadhaarNumber) {
-      nextErrors.aadhaarNumber = "Aadhaar / National ID is required.";
-    } else if (!/^\d{12}$/.test(aadhaarNumber)) {
-      nextErrors.aadhaarNumber = "Enter exactly 12 digits with no spaces or letters.";
-    }
-
-    if (Object.keys(nextErrors).length) {
-      setAadhaarErrors(nextErrors);
-      form.querySelector('[name="aadhaarNumber"]')?.focus();
+    setMessage("");
+    const check = validateAadhaarClient(aadhaarVal);
+    if (!check.valid) {
+      setAadhaarErrors({ aadhaarNumber: check.error });
       return;
     }
 
     setAadhaarErrors({});
     onSave({
+      aadhaarNumber: check.clean,
       identityVerification: {
         ...identity,
-        status: identity.status === "verified" ? "verified" : "pending",
         aadhaar: {
           ...identity.aadhaar,
           status: "added",
-          maskedNumber: maskAadhaar(aadhaarNumber),
+          maskedNumber: maskAadhaar(check.clean),
         },
       },
     });
-    form.reset();
-    setMessage("Aadhaar / National ID details saved. Verification is still pending.");
+    setMessage("✓ Aadhaar / National ID details saved.");
+    setMessageType("success");
   };
 
   const saveLicence = (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const values = new FormData(form);
-    const licenceNumber = String(values.get("licenceNumber") || "").trim().toUpperCase();
-    const dateOfBirth = String(values.get("dateOfBirth") || "");
-    const expiryDate = String(values.get("expiryDate") || "");
+    setMessage("");
+    const check = validateDrivingLicenseClient(licenceVal);
     const today = dateISO(new Date());
     const nextErrors = {};
 
-    if (!licenceNumber) {
-      nextErrors.licenceNumber = "Driving licence number is required.";
-    } else if (!/^[A-Z0-9 -]{6,20}$/.test(licenceNumber)) {
-      nextErrors.licenceNumber = "Use 6-20 letters or numbers for the licence number.";
+    if (!check.valid) {
+      nextErrors.licenceNumber = check.error;
     }
 
-    if (!dateOfBirth) {
+    if (!dobVal) {
       nextErrors.dateOfBirth = "Date of birth is required.";
-    } else if (!isAtLeastAge(dateOfBirth, 18)) {
+    } else if (!isAtLeastAge(dobVal, 18)) {
       nextErrors.dateOfBirth = "Customer must be at least 18 years old.";
     }
 
-    if (!expiryDate) {
+    if (!expiryVal) {
       nextErrors.expiryDate = "Licence expiry date is required.";
-    } else if (Number.isNaN(new Date(expiryDate).getTime())) {
-      nextErrors.expiryDate = "Enter a valid expiry date.";
-    } else if (expiryDate < today) {
+    } else if (expiryVal < today) {
       nextErrors.expiryDate = "Licence expiry date cannot be in the past.";
     }
 
     if (Object.keys(nextErrors).length) {
       setLicenceErrors(nextErrors);
-      form.querySelector('[name="' + Object.keys(nextErrors)[0] + '"]')?.focus();
       return;
     }
 
     setLicenceErrors({});
     onSave({
+      drivingLicenseNo: check.clean,
       identityVerification: {
         ...identity,
-        status: identity.status === "verified" ? "verified" : "pending",
         drivingLicence: {
           ...identity.drivingLicence,
           status: "added",
-          licenceNumberMasked: maskLicence(licenceNumber),
-          dateOfBirth,
-          expiryDate,
+          licenceNumberMasked: maskLicence(check.clean),
+          dateOfBirth: dobVal,
+          expiryDate: expiryVal,
         },
       },
     });
-    form.reset();
-    setMessage("Driving licence details saved. Verification is still pending.");
+    setMessage("✓ Driving licence details saved.");
+    setMessageType("success");
+  };
+
+  // ── Hosted Didit Verification Session (Razorpay style popup) ──
+  const handleHostedDiditSession = async () => {
+    try {
+      setKycPopupLoading(true);
+      setMessage("Opening Didit Verification Portal...");
+      setMessageType("info");
+
+      const session = await initiateDiditKyc();
+
+      if (!session || !session.url) {
+        throw new Error("Unable to create Didit verification session.");
+      }
+
+      const popup = window.open(
+        session.url,
+        "didit_kyc_window",
+        "width=620,height=750,left=250,top=100,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes"
+      );
+
+      setMessage("Please complete identity verification in the Didit window. Listening for completion...");
+      setMessageType("info");
+
+      if (pollRef.current) clearInterval(pollRef.current);
+
+      let attempts = 0;
+      const maxAttempts = 100; // ~5 minutes
+
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          clearInterval(pollRef.current);
+          setKycPopupLoading(false);
+          setMessage("Verification session timed out. Please try again.");
+          setMessageType("error");
+          return;
+        }
+
+        try {
+          const res = await kycApi.getMyStatus();
+          const statusData = res?.data || res;
+
+          if (statusData?.isVerified || statusData?.kycStatus === "VERIFIED") {
+            clearInterval(pollRef.current);
+            if (popup && !popup.closed) {
+              try { popup.close(); } catch (e) {}
+            }
+
+            const cleanAadhaar = statusData.aadhaarMasked || (aadhaarVal ? maskAadhaar(aadhaarVal) : "XXXX XXXX 1012");
+            const cleanDl = statusData.drivingLicenseNo ? maskLicence(statusData.drivingLicenseNo) : (licenceVal ? maskLicence(licenceVal) : "XXXX XXXX 2345");
+
+            await updateProfile({
+              identityVerification: {
+                status: "verified",
+                provider: statusData.provider || "DIDIT",
+                sessionId: statusData.sessionId || session.session_id,
+                verifiedAt: statusData.verifiedAt || new Date().toISOString(),
+                aadhaar: {
+                  status: "added",
+                  maskedNumber: cleanAadhaar
+                },
+                drivingLicence: {
+                  status: "added",
+                  licenceNumberMasked: cleanDl,
+                  dateOfBirth: dobVal || "1996-05-14",
+                  expiryDate: expiryVal || "2034-05-14"
+                }
+              }
+            });
+
+            setMessage("✓ Identity verified successfully with Didit Protocol!");
+            setMessageType("success");
+            setKycPopupLoading(false);
+          }
+        } catch (pollErr) {
+          console.warn("KYC status poll check error:", pollErr);
+        }
+      }, 3000);
+    } catch (err) {
+      setMessage("Failed to initiate Didit session: " + (err.message || "Error"));
+      setMessageType("error");
+      setKycPopupLoading(false);
+    }
+  };
+
+  const handleResetKyc = async () => {
+    if (!window.confirm("Are you sure you want to reset and clear all saved KYC details? This will clear your Aadhaar, Driving Licence, and verification status.")) {
+      return;
+    }
+
+    try {
+      setDiditLoading(true);
+      if (pollRef.current) clearInterval(pollRef.current);
+      await resetDiditKyc();
+      setAadhaarVal("");
+      setLicenceVal("");
+      setAadhaarErrors({});
+      setLicenceErrors({});
+      setMessage("✓ KYC details have been reset. All stored Aadhaar, Driving Licence, and verification records have been cleared.");
+      setMessageType("success");
+    } catch (err) {
+      setMessage("Failed to reset KYC: " + (err.message || "Error resetting KYC"));
+      setMessageType("error");
+    } finally {
+      setDiditLoading(false);
+    }
   };
 
   return (
     <section className="form-card identity-card" id="identity-verification">
       <div className="card-heading">
         <div>
-          <h2>Identity Verification</h2>
-          <p>Documents can be prepared now. Final verification will happen after the verification service is integrated.</p>
+          <h2>Identity Verification (KYC)</h2>
+          <p>Instant document validation powered by <strong>Didit KYC Protocol</strong>.</p>
         </div>
         <StatusBadge>{identityStatusLabel(identity.status)}</StatusBadge>
       </div>
@@ -1532,62 +1810,145 @@ function IdentityVerificationPanel({ customer, onSave }) {
         <p>
           <span>Aadhaar / National ID</span>
           <b>{identityStatusLabel(identity.aadhaar.status)}</b>
-          {identity.aadhaar.maskedNumber && <small>{identity.aadhaar.maskedNumber}</small>}
+          {identity.aadhaar.maskedNumber ? <small>{identity.aadhaar.maskedNumber}</small> : <small>Not added</small>}
         </p>
         <p>
           <span>Driving Licence</span>
           <b>{identityStatusLabel(identity.drivingLicence.status)}</b>
-          {identity.drivingLicence.licenceNumberMasked && <small>{identity.drivingLicence.licenceNumberMasked}</small>}
+          {identity.drivingLicence.licenceNumberMasked ? <small>{identity.drivingLicence.licenceNumberMasked}</small> : <small>Not added</small>}
         </p>
       </div>
 
+      {/* ── Hosted KYC Session Option (Primary Didit Window Verification) ── */}
+      {identity.status !== "verified" ? (
+        <div style={{
+          padding: "1.25rem",
+          background: "linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.08) 100%)",
+          border: "1px solid rgba(99, 102, 241, 0.25)",
+          borderRadius: "10px",
+          marginTop: "0.5rem",
+          marginBottom: "1rem"
+        }}>
+          <h3 style={{ margin: "0 0 0.4rem 0", fontSize: "1.05rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span>⚡</span> Verify Identity with Didit
+          </h3>
+          <p style={{ margin: "0 0 1rem 0", fontSize: "0.875rem", color: "var(--color-muted, #666)", lineHeight: "1.4" }}>
+            Click below to open the official Didit KYC verification window. You will scan your Aadhaar / Driving Licence and complete selfie validation directly on Didit.
+          </p>
+          <Button
+            type="button"
+            className="full"
+            onClick={handleHostedDiditSession}
+            disabled={kycPopupLoading}
+            style={{
+              background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+              color: "#fff",
+              fontWeight: 600,
+              padding: "0.8rem 1.2rem",
+              fontSize: "0.95rem"
+            }}
+          >
+            {kycPopupLoading ? "Waiting for Didit Verification..." : "Start KYC with Didit →"}
+          </Button>
+        </div>
+      ) : (
+        <div style={{
+          padding: "1rem",
+          background: "rgba(16, 185, 129, 0.08)",
+          border: "1px solid rgba(16, 185, 129, 0.3)",
+          borderRadius: "8px",
+          margin: "0.75rem 0",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          color: "var(--color-success, #059669)",
+          fontWeight: 600
+        }}>
+          <span>✓</span> Identity Verified with Didit Protocol
+        </div>
+      )}
+
+      {/* Aadhaar Details (Optional / Saved Info) */}
       <form className="identity-form" onSubmit={saveAadhaar} noValidate>
         <h3>Aadhaar / National ID</h3>
         <FormInput
-          label="12-digit input"
+          label="12-digit Aadhaar Number"
           name="aadhaarNumber"
           inputMode="numeric"
           maxLength="12"
-          placeholder="Enter 12 digits"
+          placeholder="e.g. 456789123451"
+          value={aadhaarVal}
+          onChange={(e) => {
+            setAadhaarVal(e.target.value);
+            if (aadhaarErrors.aadhaarNumber) setAadhaarErrors({});
+          }}
           error={aadhaarErrors.aadhaarNumber}
+          disabled={identity.status === "verified"}
         />
-        <Button type="submit" variant="secondary">Save Aadhaar details</Button>
+        {identity.status !== "verified" && (
+          <Button type="submit" variant="secondary">Save Aadhaar details</Button>
+        )}
       </form>
 
+      {/* Driving Licence Form */}
       <form className="identity-form" onSubmit={saveLicence} noValidate>
         <h3>Driving Licence</h3>
         <FormInput
           label="Licence number"
           name="licenceNumber"
-          placeholder="e.g. KA0120150012345"
+          placeholder="e.g. KA01 20150012345"
+          value={licenceVal}
+          onChange={(e) => {
+            setLicenceVal(e.target.value);
+            if (licenceErrors.licenceNumber) setLicenceErrors({});
+          }}
           error={licenceErrors.licenceNumber}
+          disabled={identity.status === "verified"}
         />
         <div className="two-col">
           <FormInput
             label="Date of birth"
             name="dateOfBirth"
             type="date"
+            value={dobVal}
+            onChange={(e) => setDobVal(e.target.value)}
             error={licenceErrors.dateOfBirth}
+            disabled={identity.status === "verified"}
           />
           <FormInput
             label="Licence expiry date"
             name="expiryDate"
             type="date"
             min={dateISO(new Date())}
+            value={expiryVal}
+            onChange={(e) => setExpiryVal(e.target.value)}
             error={licenceErrors.expiryDate}
+            disabled={identity.status === "verified"}
           />
         </div>
-        <Button type="submit" variant="secondary">Save licence details</Button>
+        {identity.status !== "verified" && (
+          <Button type="submit" variant="secondary">Save licence details</Button>
+        )}
       </form>
 
-      <Button
-        type="button"
-        className="full"
-        onClick={() => setMessage("Identity verification integration is not connected yet. Your documents can be prepared now, but verification will be completed after the verification service is integrated.")}
-      >
-        Start Verification
-      </Button>
-      {message && <p className="green">{message}</p>}
+      {/* Reset & Clear KYC Details Action */}
+      {(identity.status === "verified" || aadhaarVal || licenceVal) && (
+        <Button
+          type="button"
+          onClick={handleResetKyc}
+          className="danger-btn full"
+          disabled={kycPopupLoading}
+        >
+          Reset & Clear KYC Details
+        </Button>
+      )}
+
+      {/* Dynamic Feedback Message */}
+      {message && (
+        <div className={`alert-box ${messageType}`}>
+          {message}
+        </div>
+      )}
     </section>
   );
 }
@@ -1713,8 +2074,13 @@ function Profile() {
                 disabled={!edit}
               />
             </div>
-            <FormInput label="Email" name="email" defaultValue={displayEmail} disabled={!edit} />
-            <FormInput label="Phone" name="phone" defaultValue={displayPhone} disabled={!edit} />
+            <FormInput
+              label="Aadhaar-linked Phone"
+              name="phone"
+              placeholder="10-digit Aadhaar-linked mobile (e.g. 9876543210)"
+              defaultValue={displayPhone}
+              disabled={!edit}
+            />
             <h3>Address & emergency contact</h3>
             <FormInput
               label="Address"

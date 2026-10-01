@@ -1872,6 +1872,29 @@ td small {
 .identity-card {
   display: grid;
   gap: 18px;
+  /* Prevent any child from overflowing the sidebar column */
+  min-width: 0;
+  overflow: hidden;
+}
+/* File upload section inside identity card: always single column */
+.identity-card .two-col {
+  grid-template-columns: 1fr;
+}
+/* Native file input: constrain to container width */
+.file-input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
 }
 .identity-card .card-heading {
   gap: 14px;
@@ -1879,7 +1902,7 @@ td small {
 }
 .identity-status-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
 }
 .identity-status-grid p,
@@ -1924,6 +1947,64 @@ td small {
   .identity-status-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.alert-box {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-top: 10px;
+  line-height: 1.4;
+  display: block;
+}
+.alert-box.success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+.alert-box.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+.alert-box.info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.danger-btn {
+  background: transparent !important;
+  color: #dc2626 !important;
+  border: 1px solid #f87171 !important;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.danger-btn:hover {
+  background: #fef2f2 !important;
+  border-color: #dc2626 !important;
+}
+
+.otp-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.otp-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.otp-badge.success {
+  background: #dcfce7;
+  color: #15803d;
+}
+.otp-badge.pending {
+  background: #fef3c7;
+  color: #b45309;
 }
 
 .vehicle-carousel {
@@ -2081,7 +2162,10 @@ td small {
   margin-top: 4px;
 }
 .profile-side {
+  display: grid;
   gap: 14px;
+  min-width: 0;        /* prevent grid blowout */
+  align-content: start;
 }
 .password-form {
   display: grid;

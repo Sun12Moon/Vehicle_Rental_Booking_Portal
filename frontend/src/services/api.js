@@ -78,4 +78,14 @@ export const adminApi = {
   getReports: (type) => apiClient.get('/admin/reports', { params: { type } })
 };
 
+export const kycApi = {
+  createSession: (data) => apiClient.post('/kyc/session', data || {}),
+  getMyStatus: () => apiClient.get('/kyc/my-status'),
+  verify: (data) => apiClient.post('/kyc/verify', data),
+  verifyWithImages: (formData) => apiClient.post('/kyc/verify-images', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  reset: () => apiClient.post('/kyc/reset')
+};
+
 export default apiClient;
