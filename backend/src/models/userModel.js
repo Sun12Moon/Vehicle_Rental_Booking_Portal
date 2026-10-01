@@ -96,6 +96,7 @@ const userModel = {
       postalCode = '560001',
       emergencyContactName = null,
       emergencyContactPhone = null,
+      profileImage = null,
       kycStatus = 'NOT_STARTED',
       kycProvider = 'DIDIT',
       kycSessionId = null
@@ -106,13 +107,13 @@ const userModel = {
         INSERT INTO customer_profiles (
           user_id, first_name, last_name, phone, driving_license_no, aadhaar_number,
           address, city, state, country, postal_code, emergency_contact_name, emergency_contact_phone,
-          kyc_status, kyc_provider, kyc_session_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+          profile_image, kyc_status, kyc_provider, kyc_session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
       `;
       const result = await db.query(sql, [
         userId, firstName, lastName, phone, drivingLicenseNo, aadhaarNumber,
         address, city, state, country, postalCode, emergencyContactName, emergencyContactPhone,
-        kycStatus, kycProvider, kycSessionId
+        profileImage, kycStatus, kycProvider, kycSessionId
       ]);
       return result.insertId;
     }
@@ -133,6 +134,7 @@ const userModel = {
       postal_code: postalCode,
       emergency_contact_name: emergencyContactName,
       emergency_contact_phone: emergencyContactPhone,
+      profile_image: profileImage,
       kyc_status: kycStatus,
       kyc_provider: kycProvider,
       kyc_session_id: kycSessionId
@@ -155,6 +157,7 @@ const userModel = {
             city = COALESCE(?, city),
             emergency_contact_name = COALESCE(?, emergency_contact_name),
             emergency_contact_phone = COALESCE(?, emergency_contact_phone),
+            profile_image = COALESCE(?, profile_image),
             kyc_status = COALESCE(?, kyc_status),
             kyc_session_id = COALESCE(?, kyc_session_id),
             kyc_verified_at = COALESCE(?, kyc_verified_at),
@@ -171,6 +174,7 @@ const userModel = {
         data.city || null,
         data.emergencyContactName || null,
         data.emergencyContactPhone || null,
+        data.profileImage || data.profile_image || null,
         data.kycStatus || null,
         data.kycSessionId || null,
         data.kycVerifiedAt || null,
@@ -193,6 +197,7 @@ const userModel = {
       if (data.city !== undefined) profile.city = data.city;
       if (data.emergencyContactName !== undefined) profile.emergency_contact_name = data.emergencyContactName;
       if (data.emergencyContactPhone !== undefined) profile.emergency_contact_phone = data.emergencyContactPhone;
+      if (data.profileImage !== undefined || data.profile_image !== undefined) profile.profile_image = data.profileImage || data.profile_image;
       if (data.kycStatus !== undefined) profile.kyc_status = data.kycStatus;
       if (data.kycSessionId !== undefined) profile.kyc_session_id = data.kycSessionId;
       if (data.kycVerifiedAt !== undefined) profile.kyc_verified_at = data.kycVerifiedAt;

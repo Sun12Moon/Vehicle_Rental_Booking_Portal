@@ -34,6 +34,7 @@ apiClient.interceptors.response.use(
 export const authApi = {
   login: (credentials) => apiClient.post('/auth/login', credentials),
   register: (userData) => apiClient.post('/auth/register', userData),
+  googleAuth: (payload) => apiClient.post('/auth/google', payload),
   getCurrentUser: () => apiClient.get('/auth/me'),
   updateProfile: (profileData) => apiClient.put('/auth/profile', profileData)
 };

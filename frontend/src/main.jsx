@@ -26,6 +26,7 @@ import {
   normalizeIdentityVerification,
 } from "./context/AppContext";
 import { kycApi } from "./services/api";
+import GoogleAuthButton, { GoogleLogo } from "./components/GoogleAuthButton";
 import "./styles.css";
 const INR = (n) =>
   new Intl.NumberFormat("en-IN", {
@@ -1397,6 +1398,24 @@ function Auth({ register: isRegister = false }) {
               </button>
             </div>
           )}
+
+          {(isRegister || roleMode === "customer") && (
+            <div className="google-auth-wrapper">
+              <GoogleAuthButton
+                mode={isRegister ? "signup" : "signin"}
+                onSuccess={(u) => {
+                  nav("/dashboard");
+                }}
+                onError={(errMessage) => {
+                  setErrors({ email: errMessage });
+                }}
+              />
+              <div className="auth-divider">
+                <span>or continue with email</span>
+              </div>
+            </div>
+          )}
+
           {isRegister && (
             <div className="two-col">
               <FormInput name="firstName" label="First name" error={errors.firstName} />
@@ -2028,11 +2047,26 @@ function Profile() {
     <CustomerLayout>
       <section className="account-page">
         <div className="account-hero">
-          <div className="avatar">{avatarInitials}</div>
+          <div className="avatar" style={{ overflow: "hidden" }}>
+            {user?.profileImage || user?.picture ? (
+              <img
+                src={user.profileImage || user.picture}
+                alt={displayName}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            ) : (
+              avatarInitials
+            )}
+          </div>
           <div>
             <p className="eyebrow blue">MY ACCOUNT</p>
             <h1>{displayName}</h1>
             <p>{displayEmail}</p>
+            {(user?.authProvider === "google" || user?.profileImage) && (
+              <span className="google-badge">
+                <GoogleLogo size={13} /> Connected with Google
+              </span>
+            )}
           </div>
           <Button variant="secondary" onClick={() => setEdit(!edit)}>
             <Icons.Pencil size={16} /> {edit ? "Done editing" : "Edit profile"}

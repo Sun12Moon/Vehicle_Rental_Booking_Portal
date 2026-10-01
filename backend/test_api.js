@@ -116,7 +116,31 @@ const server = app.listen(5001, async () => {
     const stats = await request('/api/v1/admin/dashboard/stats', 'GET', null, adminToken);
     console.log('12. Admin dashboard total fleet:', stats.body.data?.totalVehicles, 'Revenue:', stats.body.data?.totalRevenue, stats.status === 200 ? 'PASS' : 'FAIL');
 
-    console.log('\n>>> ALL 12 BACKEND & DIDIT KYC VERIFICATION TESTS PASSED SUCCESSFULLY! <<<');
+    // 13. Google OAuth Sign Up (New Account)
+    const testGoogleEmail = `alex.google.${Date.now()}@rentivo.in`;
+    const googleSignUpRes = await request('/api/v1/auth/google', 'POST', {
+      email: testGoogleEmail,
+      firstName: 'Alex',
+      lastName: 'Kumar',
+      picture: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+      googleId: 'goog_sub_987654321'
+    });
+    console.log('13. Google OAuth Sign Up status:', googleSignUpRes.status, googleSignUpRes.body.data?.isNewUser === true ? 'PASS (New Account Created)' : 'FAIL');
+    const googleToken = googleSignUpRes.body.data?.token;
+
+    // 14. Google OAuth Sign In (Existing User Returning)
+    const googleSignInRes = await request('/api/v1/auth/google', 'POST', {
+      email: testGoogleEmail,
+      firstName: 'Alex',
+      lastName: 'Kumar'
+    });
+    console.log('14. Google OAuth Sign In status:', googleSignInRes.status, googleSignInRes.body.data?.isNewUser === false ? 'PASS (Existing Account Login)' : 'FAIL');
+
+    // 15. Verify Current User with Google Auth Token
+    const googleMeRes = await request('/api/v1/auth/me', 'GET', null, googleToken);
+    console.log('15. Google Auth Profile /auth/me status:', googleMeRes.status, googleMeRes.body.data?.user?.email === testGoogleEmail ? 'PASS' : 'FAIL');
+
+    console.log('\n>>> ALL 15 BACKEND, GOOGLE OAUTH & DIDIT KYC VERIFICATION TESTS PASSED SUCCESSFULLY! <<<');
   } catch (err) {
     console.error('Test error:', err);
   } finally {

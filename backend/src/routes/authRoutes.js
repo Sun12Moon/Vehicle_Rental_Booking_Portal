@@ -27,6 +27,7 @@ router.post(
   authController.login
 );
 
+router.post('/google', authController.googleAuth);
 router.get('/me', authenticateToken, authController.getCurrentUser);
 router.put('/profile', authenticateToken, authController.updateProfile);
 
