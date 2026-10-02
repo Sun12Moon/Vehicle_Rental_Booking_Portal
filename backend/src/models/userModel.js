@@ -95,7 +95,11 @@ const userModel = {
       country = 'India',
       postalCode = '560001',
       emergencyContactName = null,
-      emergencyContactPhone = null
+      emergencyContactPhone = null,
+      profileImage = null,
+      kycStatus = 'NOT_STARTED',
+      kycProvider = 'DIDIT',
+      kycSessionId = null
     } = profileData;
 
     if (db.getStatus().isConnected) {
@@ -103,12 +107,13 @@ const userModel = {
         INSERT INTO customer_profiles (
           user_id, first_name, last_name, phone, driving_license_no, aadhaar_number,
           address, city, state, country, postal_code, emergency_contact_name, emergency_contact_phone,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+          profile_image, kyc_status, kyc_provider, kyc_session_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
       `;
       const result = await db.query(sql, [
         userId, firstName, lastName, phone, drivingLicenseNo, aadhaarNumber,
-        address, city, state, country, postalCode, emergencyContactName, emergencyContactPhone
+        address, city, state, country, postalCode, emergencyContactName, emergencyContactPhone,
+        profileImage, kycStatus, kycProvider, kycSessionId
       ]);
       return result.insertId;
     }
@@ -128,7 +133,11 @@ const userModel = {
       country,
       postal_code: postalCode,
       emergency_contact_name: emergencyContactName,
-      emergency_contact_phone: emergencyContactPhone
+      emergency_contact_phone: emergencyContactPhone,
+      profile_image: profileImage,
+      kyc_status: kycStatus,
+      kyc_provider: kycProvider,
+      kyc_session_id: kycSessionId
     };
     store.customer_profiles.push(newProfile);
     return newId;
@@ -148,6 +157,10 @@ const userModel = {
             city = COALESCE(?, city),
             emergency_contact_name = COALESCE(?, emergency_contact_name),
             emergency_contact_phone = COALESCE(?, emergency_contact_phone),
+            profile_image = COALESCE(?, profile_image),
+            kyc_status = COALESCE(?, kyc_status),
+            kyc_session_id = COALESCE(?, kyc_session_id),
+            kyc_verified_at = COALESCE(?, kyc_verified_at),
             updated_at = NOW()
         WHERE user_id = ?
       `;
@@ -161,6 +174,10 @@ const userModel = {
         data.city || null,
         data.emergencyContactName || null,
         data.emergencyContactPhone || null,
+        data.profileImage || data.profile_image || null,
+        data.kycStatus || null,
+        data.kycSessionId || null,
+        data.kycVerifiedAt || null,
         id
       ]);
       return userModel.findById(id);
@@ -180,6 +197,38 @@ const userModel = {
       if (data.city !== undefined) profile.city = data.city;
       if (data.emergencyContactName !== undefined) profile.emergency_contact_name = data.emergencyContactName;
       if (data.emergencyContactPhone !== undefined) profile.emergency_contact_phone = data.emergencyContactPhone;
+      if (data.profileImage !== undefined || data.profile_image !== undefined) profile.profile_image = data.profileImage || data.profile_image;
+      if (data.kycStatus !== undefined) profile.kyc_status = data.kycStatus;
+      if (data.kycSessionId !== undefined) profile.kyc_session_id = data.kycSessionId;
+      if (data.kycVerifiedAt !== undefined) profile.kyc_verified_at = data.kycVerifiedAt;
+    }
+    return userModel.findById(id);
+  },
+
+  resetKycProfile: async (userId) => {
+    const id = Number(userId);
+    if (db.getStatus().isConnected) {
+      const sql = `
+        UPDATE customer_profiles
+        SET kyc_status = 'NOT_STARTED',
+            kyc_session_id = NULL,
+            kyc_verified_at = NULL,
+            aadhaar_number = NULL,
+            driving_license_no = NULL,
+            updated_at = NOW()
+        WHERE user_id = ?
+      `;
+      await db.query(sql, [id]);
+      return userModel.findById(id);
+    }
+
+    const profile = store.customer_profiles.find(cp => cp.user_id === id);
+    if (profile) {
+      profile.kyc_status = 'NOT_STARTED';
+      profile.kyc_session_id = null;
+      profile.kyc_verified_at = null;
+      profile.aadhaar_number = null;
+      profile.driving_license_no = null;
     }
     return userModel.findById(id);
   },

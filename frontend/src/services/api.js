@@ -34,6 +34,7 @@ apiClient.interceptors.response.use(
 export const authApi = {
   login: (credentials) => apiClient.post('/auth/login', credentials),
   register: (userData) => apiClient.post('/auth/register', userData),
+  googleAuth: (payload) => apiClient.post('/auth/google', payload),
   getCurrentUser: () => apiClient.get('/auth/me'),
   updateProfile: (profileData) => apiClient.put('/auth/profile', profileData)
 };
@@ -76,6 +77,16 @@ export const adminApi = {
   getMaintenance: () => apiClient.get('/admin/maintenance'),
   createMaintenance: (data) => apiClient.post('/admin/maintenance', data),
   getReports: (type) => apiClient.get('/admin/reports', { params: { type } })
+};
+
+export const kycApi = {
+  createSession: (data) => apiClient.post('/kyc/session', data || {}),
+  getMyStatus: () => apiClient.get('/kyc/my-status'),
+  verify: (data) => apiClient.post('/kyc/verify', data),
+  verifyWithImages: (formData) => apiClient.post('/kyc/verify-images', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  reset: () => apiClient.post('/kyc/reset')
 };
 
 export default apiClient;
