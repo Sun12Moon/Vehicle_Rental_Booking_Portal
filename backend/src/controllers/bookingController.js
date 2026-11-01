@@ -1,6 +1,5 @@
 const bookingModel = require('../models/bookingModel');
 const vehicleModel = require('../models/vehicleModel');
-const paymentModel = require('../models/paymentModel');
 const userModel = require('../models/userModel');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 
@@ -31,7 +30,6 @@ const bookingController = {
         pickupLocation,
         returnLocation,
         promoCode,
-        paymentMethod = 'UPI',
         remarks = ''
       } = req.body;
 
@@ -60,14 +58,14 @@ const bookingController = {
       }
 
       // Resolve customer ID
-      let customerId = req.user?.customerId;
-      if (!customerId && req.user?.userId) {
-        const user = await userModel.findById(req.user.userId);
-        customerId = user?.customer_id;
+      const user = await userModel.findById(req.user.userId);
+      if (!user?.customer_id) {
+        return errorResponse(res, 403, 'A customer profile is required to create a booking.');
       }
-      if (!customerId) {
-        customerId = 2; // Default fallback to active customer
+      if (user.kyc_status !== 'VERIFIED') {
+        return errorResponse(res, 403, 'Complete Didit identity verification before booking.');
       }
+      const customerId = user.customer_id;
 
       // Calculate days & pricing
       const pickupTime = new Date(pickupDate).getTime();
@@ -95,7 +93,7 @@ const bookingController = {
         returnDate,
         pickupLocation: pickupLocation || vehicle.branch_name || 'Main Branch',
         returnLocation: returnLocation || pickupLocation || vehicle.branch_name || 'Main Branch',
-        bookingStatus: 'CONFIRMED',
+        bookingStatus: 'PENDING',
         totalDays,
         dailyRent,
         securityDeposit,
@@ -105,40 +103,11 @@ const bookingController = {
         remarks
       });
 
-      // 2. Automated Payment & Invoice Generation (FR8, FR9)
-      const transactionRef = `pay_${Math.random().toString(36).slice(2, 11)}`;
-      const paymentId = await paymentModel.createPayment({
-        bookingId: booking.booking_id,
-        transactionReference: transactionRef,
-        paymentMethod,
-        amount: totalAmount,
-        paymentStatus: 'COMPLETED',
-        paymentGateway: 'Razorpay',
-        gatewayResponse: JSON.stringify({ status: 'captured', transactionId: transactionRef })
-      });
-
-      const invoiceNumber = `INV-${new Date().getFullYear()}-${String(booking.booking_id).padStart(4, '0')}`;
-      const invoiceId = await paymentModel.createInvoice({
-        paymentId,
-        invoiceNumber,
-        subtotal,
-        taxAmount: tax,
-        totalAmount,
-        pdfPath: `/invoices/${invoiceNumber}.pdf`
-      });
-
       const completeBooking = await bookingModel.getBookingById(booking.booking_id);
 
-      return successResponse(res, 201, 'Vehicle booked and confirmed successfully', {
+      return successResponse(res, 201, 'Booking request created and awaiting payment', {
         booking: completeBooking,
-        invoice: {
-          invoiceId,
-          invoiceNumber,
-          totalAmount,
-          subtotal,
-          taxAmount: tax,
-          securityDeposit
-        }
+        paymentRequired: true
       });
     } catch (err) {
       next(err);

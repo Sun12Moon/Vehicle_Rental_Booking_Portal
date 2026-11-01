@@ -5,6 +5,14 @@ const userModel = require('../models/userModel');
 const { signToken } = require('../utils/jwt');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 
+const publicKycFields = (user) => ({
+  kycStatus: user.kyc_status || 'NOT_STARTED',
+  kycProvider: user.kyc_provider || 'DIDIT',
+  kycSessionId: user.kyc_session_id || null,
+  kycVerifiedAt: user.kyc_verified_at || null,
+  aadhaarMasked: user.aadhaar_number ? `XXXX XXXX ${String(user.aadhaar_number).slice(-4)}` : null
+});
+
 const authController = {
   register: async (req, res, next) => {
     try {
@@ -75,6 +83,7 @@ const authController = {
           lastName: user.last_name,
           name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email.split('@')[0],
           phone: user.phone,
+          ...publicKycFields(user),
           drivingLicenseNo: user.driving_license_no,
           address: user.address,
           city: user.city
@@ -122,6 +131,7 @@ const authController = {
           lastName: user.last_name || (roleLower === 'admin' ? 'Manager' : ''),
           name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || (roleLower === 'admin' ? 'Admin Manager' : user.email.split('@')[0]),
           phone: user.phone || '',
+          ...publicKycFields(user),
           drivingLicenseNo: user.driving_license_no || '',
           address: user.address || '',
           city: user.city || ''
@@ -150,6 +160,7 @@ const authController = {
           lastName: user.last_name,
           name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
           phone: user.phone,
+          ...publicKycFields(user),
           drivingLicenseNo: user.driving_license_no,
           address: user.address,
           city: user.city,
@@ -179,6 +190,7 @@ const authController = {
           lastName: updatedUser.last_name,
           name: `${updatedUser.first_name || ''} ${updatedUser.last_name || ''}`.trim(),
           phone: updatedUser.phone,
+          ...publicKycFields(updatedUser),
           drivingLicenseNo: updatedUser.driving_license_no,
           address: updatedUser.address,
           city: updatedUser.city,
@@ -332,6 +344,7 @@ const authController = {
           lastName: user.last_name || lastName,
           name: `${user.first_name || firstName} ${user.last_name || lastName}`.trim() || user.email.split('@')[0],
           phone: user.phone || '',
+          ...publicKycFields(user),
           drivingLicenseNo: user.driving_license_no || '',
           profileImage: user.profile_image || picture || null,
           authProvider: 'google'

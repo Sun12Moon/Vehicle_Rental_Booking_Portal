@@ -25,7 +25,7 @@ import {
   DEMO_USER_EMAIL,
   normalizeIdentityVerification,
 } from "./context/AppContext";
-import { kycApi } from "./services/api";
+import { kycApi, paymentsApi } from "./services/api";
 import GoogleAuthButton, { GoogleLogo } from "./components/GoogleAuthButton";
 import "./styles.css";
 const INR = (n) =>
@@ -48,6 +48,15 @@ const downloadCsv = (filename, rows) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 };
 const dateISO = (d) => new Date(d).toISOString().slice(0, 10);
+const loadRazorpayCheckout = () => new Promise((resolve, reject) => {
+  if (window.Razorpay) return resolve();
+  const script = document.createElement("script");
+  script.src = "https://checkout.razorpay.com/v1/checkout.js";
+  script.async = true;
+  script.onload = () => resolve();
+  script.onerror = () => reject(new Error("Could not load Razorpay Checkout. Check your internet connection and try again."));
+  document.body.appendChild(script);
+});
 const daysBetween = (a, b) =>
   Math.max(1, Math.ceil((new Date(b) - new Date(a)) / 86400000));
 const statusClass = (s) =>
@@ -852,10 +861,7 @@ function Booking() {
       returnLocation: branches[0].name,
       code: "",
     });
-  const currentCustomer =
-    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
-    customers.find((customer) => customer.id === user?.id) ||
-    user;
+  const currentCustomer = user;
   const v = vehicles.find((x) => x.id === vehicleId) || vehicles[0];
   const bookable = isVehicleBookable(v);
   const days = daysBetween(form.pickup, form.return),
@@ -1023,50 +1029,38 @@ function Booking() {
   );
 }
 function Payment() {
-  const { vehicles, user, customers, createBooking } = useApp();
-  const nav = useNavigate(),
-    q = new URLSearchParams(location.search),
+  const { vehicles, user, createBooking, completeBookingPayment } = useApp();
+  const nav = useNavigate();
+  const q = new URLSearchParams(location.search),
     v = vehicles.find((x) => x.id === q.get("vehicle")) || vehicles[0],
     days = daysBetween(
       q.get("pickup") || dateISO(new Date()),
       q.get("return") || dateISO(new Date(Date.now() + 86400000)),
     );
   const code = q.get("code") || "";
-  const currentCustomer =
-    customers.find((customer) => customer.email?.toLowerCase() === user?.email?.toLowerCase()) ||
-    customers.find((customer) => customer.id === user?.id) ||
-    user;
+  const currentCustomer = user;
   const identityVerified = isIdentityVerified(currentCustomer);
   const bookable = isVehicleBookable(v);
   const agreementToken = q.get("agreement") || "";
   const agreementRecord = readAgreementRecord(agreementToken);
   const agreementAccepted = agreementMatchesTrip(agreementRecord, q, v.id);
-  const [method, setMethod] = useState("UPI"),
-    [state, setState] = useState("ready"),
+  const [state, setState] = useState("ready"),
     [bookingError, setBookingError] = useState("");
   const subtotal = v.dailyRate * days,
     discount = code === "WEEKEND15" && days >= 2 ? Math.round(subtotal * 0.15) : 0,
     tax = Math.round((subtotal - discount) * 0.18),
     total = subtotal - discount + tax + v.deposit;
   const pay = async () => {
-    if (!identityVerified || !agreementAccepted || !bookable) return;
+    if (!identityVerified || !agreementAccepted || !bookable || state === "processing") return;
     setBookingError("");
     setState("processing");
     try {
-      if (method === "Wallet") {
-        setState("failed");
-        return;
-      }
-      const id = `bk-${Date.now()}`;
-      const reference = `RNT-${Math.floor(100000 + Math.random() * 899999)}`;
-      const booking = {
-        id,
-        reference,
+      await loadRazorpayCheckout();
+      const booking = await createBooking({
         vehicleId: v.id,
-        customerId: user?.id || "u1",
+        customerId: user?.id,
         pickupDate: q.get("pickup") || dateISO(new Date()),
-        returnDate:
-          q.get("return") || dateISO(new Date(Date.now() + 86400000)),
+        returnDate: q.get("return") || dateISO(new Date(Date.now() + 86400000)),
         days,
         branch: decodeURIComponent(q.get("from") || v.branch),
         returnBranch: decodeURIComponent(q.get("to") || q.get("from") || v.branch),
@@ -1076,35 +1070,65 @@ function Payment() {
         tax,
         deposit: v.deposit,
         total,
-        paymentMethod: method,
-        paymentStatus: "Paid",
-        status: "Upcoming",
+        promoCode: code,
+        paymentMethod: "Razorpay",
+        paymentStatus: "Pending",
         rentalAgreementAccepted: true,
         rentalAgreementAcceptedAt: agreementRecord.rentalAgreementAcceptedAt,
         rentalAgreementVersion: agreementRecord.version,
-      };
-      const payment = {
-        id: `pay-${Date.now()}`,
-        transaction: `pay_${Math.random().toString(36).slice(2, 10)}`,
-        booking: reference,
-        customer: user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Guest Customer",
-        amount: total,
-        method,
-        gateway: "Razorpay",
-        status: "Paid",
-        date: new Date().toLocaleDateString("en-IN", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        }),
-      };
-      const result = await createBooking(booking, payment);
-      nav(
-        `/booking-confirmation?booking=${result?.id || id}`,
-      );
+      });
+      const bookingId = Number(booking.id.replace("bk-", ""));
+      const orderResponse = await paymentsApi.createRazorpayOrder({ bookingId });
+      const order = orderResponse?.data;
+      if (!order?.orderId || !order?.keyId) throw new Error("Razorpay did not return a valid test order.");
+
+      let verificationStarted = false;
+      const checkout = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "Rentivo Mobility",
+        description: `Vehicle rental ${order.bookingReference}`,
+        order_id: order.orderId,
+        prefill: {
+          name: user?.name || [user?.firstName, user?.lastName].filter(Boolean).join(" "),
+          email: user?.email || "",
+          contact: user?.phone || ""
+        },
+        theme: { color: "#2563a6" },
+        modal: {
+          ondismiss: () => {
+            if (!verificationStarted) {
+              setState("ready");
+              setBookingError("Payment was cancelled. No payment was confirmed.");
+            }
+          }
+        },
+        handler: async (paymentResponse) => {
+          verificationStarted = true;
+          try {
+            const verifiedResponse = await paymentsApi.verifyRazorpayPayment({
+              bookingId,
+              ...paymentResponse
+            });
+            const verified = verifiedResponse?.data;
+            if (verified?.status !== "COMPLETED") throw new Error("Payment verification did not complete.");
+            completeBookingPayment(booking.id, verified);
+            nav(`/booking-confirmation?booking=${booking.id}`);
+          } catch (err) {
+            setState("ready");
+            setBookingError(err.message || "We could not verify the payment. The booking remains pending.");
+          }
+        }
+      });
+      checkout.on("payment.failed", (event) => {
+        setState("ready");
+        setBookingError(event.error?.description || "Razorpay test payment failed. Please try again.");
+      });
+      checkout.open();
     } catch (err) {
       setState("ready");
-      setBookingError(err.message || "Reservation conflict: vehicle is already booked for these dates.");
+      setBookingError(err.message || "Unable to start Razorpay test checkout.");
     }
   };
   return (
@@ -1139,50 +1163,25 @@ function Payment() {
               <span>rzp</span>
               <div>
                 <b>Razorpay</b>
-                <small>Secure mock checkout</small>
+                <small>Razorpay test mode</small>
               </div>
               <Icons.LockKeyhole size={18} />
             </div>
-            {state === "processing" ? (
-              <LoadingState />
-            ) : (
-              <>
-                <h3>Select payment method</h3>
-                {["UPI", "Card", "Net Banking", "Wallet"].map((m) => (
-                  <label
-                    className={`pay-option ${method === m ? "selected" : ""}`}
-                    key={m}
-                  >
-                    <input
-                      type="radio"
-                      name="method"
-                      checked={method === m}
-                      onChange={() => setMethod(m)}
-                    />
-                    <span>
-                      {m === "UPI"
-                        ? "UPI"
-                        : m === "Card"
-                          ? "Credit / Debit Card"
-                          : m}
-                    </span>
-                    {m === "UPI" && <small>Google Pay, PhonePe, Paytm</small>}
-                  </label>
-                ))}
+            {state === "processing" ? <LoadingState /> : <>
+            <h3>Secure test checkout</h3>
+            <p>Choose an available test payment method inside Razorpay Checkout. No real money is charged.</p>
                 {bookingError && (
                   <p className="error" style={{ marginBottom: "14px", padding: "10px", background: "rgba(239, 68, 68, 0.1)", borderRadius: "8px" }}>
                     {bookingError}
                   </p>
                 )}
-                <Button className="full" onClick={pay} disabled={!identityVerified || !agreementAccepted || !bookable}>
+                <Button className="full" onClick={pay} disabled={!identityVerified || !agreementAccepted || !bookable || state === "processing"}>
                   Pay {INR(total)}{" "}
                   <Icons.LockKeyhole size={16} />
                 </Button>
-              </>
-            )}
+            </>}
             <p className="secure-note">
-              <Icons.ShieldCheck size={15} /> This is a UI prototype. No money
-              will be charged.
+              <Icons.ShieldCheck size={15} /> Test mode only. No real money will be charged.
             </p>
           </div>
         </section>
@@ -1594,10 +1593,17 @@ function IdentityVerificationPanel({ customer, onSave }) {
   useEffect(() => {
     const handleMessage = async (event) => {
       if (event.data?.type === "DIDIT_KYC_COMPLETED") {
+        if (event.origin !== window.location.origin) return;
         if (pollRef.current) clearInterval(pollRef.current);
         try {
           const res = await kycApi.getMyStatus();
           const statusData = res?.data || res;
+          if (!(statusData?.isVerified || statusData?.kycStatus === "VERIFIED")) {
+            setMessage("Didit has not confirmed your identity yet. Please finish verification and try again.");
+            setMessageType("info");
+            setKycPopupLoading(false);
+            return;
+          }
           await updateProfile({
             identityVerification: {
               status: "verified",

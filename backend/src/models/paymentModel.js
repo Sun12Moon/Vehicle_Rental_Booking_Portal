@@ -8,7 +8,7 @@ const paymentModel = {
       transactionReference,
       paymentMethod = 'UPI',
       amount,
-      paymentStatus = 'COMPLETED',
+      paymentStatus = 'PENDING',
       paymentGateway = 'Razorpay',
       gatewayResponse = '{}'
     } = paymentData;
@@ -19,7 +19,7 @@ const paymentModel = {
           booking_id, transaction_reference, payment_method, amount,
           payment_status, payment_gateway, gateway_response, payment_date,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ${paymentStatus === 'COMPLETED' ? 'NOW()' : 'NULL'}, NOW(), NOW())
       `;
       const res = await db.query(sql, [
         bookingId, transactionReference, paymentMethod, amount,
@@ -37,10 +37,50 @@ const paymentModel = {
       amount: Number(amount),
       payment_status: paymentStatus,
       payment_gateway: paymentGateway,
-      payment_date: new Date().toISOString().replace('T', ' ').slice(0, 19)
+      payment_date: paymentStatus === 'COMPLETED' ? new Date().toISOString().replace('T', ' ').slice(0, 19) : null,
+      gateway_response: gatewayResponse
     };
     store.payments.push(newPayment);
     return newId;
+  },
+
+  getPaymentByBookingId: async (bookingId) => {
+    if (db.getStatus().isConnected) {
+      const rows = await db.query('SELECT * FROM payments WHERE booking_id = ? LIMIT 1', [Number(bookingId)]);
+      return rows[0] || null;
+    }
+    return store.payments.find(payment => payment.booking_id === Number(bookingId)) || null;
+  },
+
+  updatePaymentByBookingId: async (bookingId, fields) => {
+    const {
+      transactionReference,
+      paymentMethod,
+      amount,
+      paymentStatus,
+      gatewayResponse,
+      paymentDate = false
+    } = fields;
+    if (db.getStatus().isConnected) {
+      await db.query(
+        `UPDATE payments SET transaction_reference = ?, payment_method = ?, amount = ?,
+         payment_status = ?, gateway_response = ?, payment_date = ${paymentDate ? 'NOW()' : 'NULL'},
+         updated_at = NOW() WHERE booking_id = ?`,
+        [transactionReference, paymentMethod, amount, paymentStatus, gatewayResponse, Number(bookingId)]
+      );
+      return paymentModel.getPaymentByBookingId(bookingId);
+    }
+    const payment = store.payments.find(item => item.booking_id === Number(bookingId));
+    if (!payment) return null;
+    Object.assign(payment, {
+      transaction_reference: transactionReference,
+      payment_method: paymentMethod,
+      amount: Number(amount),
+      payment_status: paymentStatus,
+      gateway_response: gatewayResponse,
+      payment_date: paymentDate ? new Date().toISOString().replace('T', ' ').slice(0, 19) : null
+    });
+    return payment;
   },
 
   createInvoice: async (invoiceData) => {

@@ -90,56 +90,8 @@ const kycController = {
    * Direct In-Portal KYC Verification using submitted document details
    * Enforces genuine Aadhaar (Verhoeff) and Driving Licence format validation
    */
-  completeVerification: async (req, res, next) => {
-    try {
-      const userId = req.user.userId;
-      const {
-        sessionId,
-        drivingLicenseNo,
-        aadhaarNumber,
-        dateOfBirth,
-        expiryDate
-      } = req.body;
-
-      // Direct document verification with UIDAI Verhoeff algorithm & DL format checks
-      const verificationResult = await diditService.verifyDirectDocument({
-        userId,
-        aadhaarNumber,
-        drivingLicenseNo,
-        dateOfBirth,
-        expiryDate
-      });
-
-      // If document validation fails, reject with 400 and the specific error message
-      if (!verificationResult.isVerified) {
-        return errorResponse(res, 400, verificationResult.message, {
-          field: verificationResult.field
-        });
-      }
-
-      // If validated successfully, update user customer profile in database
-      const updatedUser = await userModel.updateCustomerProfile(userId, {
-        kycStatus: 'VERIFIED',
-        kycSessionId: sessionId || `didit_portal_${Date.now()}`,
-        kycVerifiedAt: new Date(),
-        drivingLicenseNo: drivingLicenseNo ? String(drivingLicenseNo).trim().toUpperCase() : undefined,
-        aadhaarNumber: aadhaarNumber ? String(aadhaarNumber).replace(/[\s-]/g, '') : undefined
-      });
-
-      return successResponse(res, 200, '✓ KYC verified successfully with Didit Protocol. Aadhaar and Driving Licence confirmed.', {
-        kycStatus: 'VERIFIED',
-        isVerified: true,
-        user: {
-          id: updatedUser.user_id,
-          email: updatedUser.email,
-          kycStatus: 'VERIFIED',
-          drivingLicenseNo: updatedUser.driving_license_no,
-          aadhaarNumber: updatedUser.aadhaar_number
-        }
-      });
-    } catch (err) {
-      next(err);
-    }
+  completeVerification: async (_req, res) => {
+    return errorResponse(res, 503, 'This direct form cannot verify identity. Complete a hosted Didit session or provider verified document check.');
   },
 
   /**

@@ -8,6 +8,26 @@ const { validate } = require('../middlewares/validate');
 const router = express.Router();
 
 router.post(
+  '/razorpay/order',
+  authenticateToken,
+  [body('bookingId').isInt({ min: 1 }).withMessage('Valid booking ID is required'), validate],
+  paymentController.createRazorpayOrder
+);
+
+router.post(
+  '/razorpay/verify',
+  authenticateToken,
+  [
+    body('bookingId').isInt({ min: 1 }).withMessage('Valid booking ID is required'),
+    body('razorpay_order_id').isString().notEmpty(),
+    body('razorpay_payment_id').isString().notEmpty(),
+    body('razorpay_signature').isString().notEmpty(),
+    validate
+  ],
+  paymentController.verifyRazorpayPayment
+);
+
+router.post(
   '/process',
   authenticateToken,
   [

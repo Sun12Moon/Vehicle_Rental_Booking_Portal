@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS payments (
   payment_id INT AUTO_INCREMENT PRIMARY KEY,
   booking_id INT NOT NULL UNIQUE,
   transaction_reference VARCHAR(100) UNIQUE NOT NULL,
-  payment_method ENUM('UPI', 'CARD', 'NET_BANKING', 'CASH') NOT NULL,
+  payment_method ENUM('UPI', 'CARD', 'NET_BANKING', 'WALLET', 'CASH') NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
   payment_status ENUM('PENDING', 'COMPLETED', 'FAILED', 'REFUNDED') DEFAULT 'PENDING',
   payment_gateway VARCHAR(100),

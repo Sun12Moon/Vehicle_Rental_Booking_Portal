@@ -80,6 +80,41 @@ export const normalizeIdentityVerification = (value = {}) => {
   };
 };
 
+const identityVerificationFromUser = (user, fallback) => {
+  const rawStatus = String(user?.kycStatus || user?.kyc_status || '').toUpperCase();
+  const statusMap = {
+    NOT_STARTED: 'not_started',
+    PENDING: 'pending',
+    IN_REVIEW: 'in_review',
+    VERIFIED: 'verified',
+    REJECTED: 'rejected'
+  };
+  if (!statusMap[rawStatus]) {
+    return normalizeIdentityVerification(user?.identityVerification || fallback);
+  }
+
+  const previous = normalizeIdentityVerification(user?.identityVerification || fallback);
+  return normalizeIdentityVerification({
+    ...previous,
+    status: statusMap[rawStatus],
+    provider: user?.kycProvider || user?.kyc_provider || previous.provider || 'DIDIT',
+    sessionId: user?.kycSessionId || user?.kyc_session_id || previous.sessionId,
+    verifiedAt: user?.kycVerifiedAt || user?.kyc_verified_at || previous.verifiedAt,
+    aadhaar: {
+      ...previous.aadhaar,
+      status: user?.aadhaarMasked ? 'added' : previous.aadhaar.status,
+      maskedNumber: user?.aadhaarMasked || previous.aadhaar.maskedNumber
+    },
+    drivingLicence: {
+      ...previous.drivingLicence,
+      status: user?.drivingLicenseNo ? 'added' : previous.drivingLicence.status,
+      licenceNumberMasked: user?.drivingLicenseNo
+        ? `XXXX XXXX ${String(user.drivingLicenseNo).slice(-4)}`
+        : previous.drivingLicence.licenceNumberMasked
+    }
+  });
+};
+
 const hydrateCustomers = (value) =>
   hydrateArray(value, seedCustomers).map((customer) => {
     const seededCustomer = seedCustomers.find(
@@ -249,8 +284,9 @@ export function AppProvider({ children }) {
               user: {
                 ...fetchedUser,
                 role: normalizedRole,
-                identityVerification: normalizeIdentityVerification(
-                  prev.user?.identityVerification || fetchedUser.identityVerification
+                identityVerification: identityVerificationFromUser(
+                  fetchedUser,
+                  prev.user?.identityVerification
                 )
               },
               token
@@ -277,12 +313,7 @@ export function AppProvider({ children }) {
         const { token, user } = response.data;
         const completeUser = {
           ...user,
-          identityVerification: normalizeIdentityVerification(
-            payload.identityVerification || user.identityVerification || {
-              status: user.kyc_status === 'VERIFIED' ? 'verified' : 'not_started',
-              provider: 'DIDIT'
-            }
-          )
+          identityVerification: identityVerificationFromUser(user, payload.identityVerification)
         };
         setState(prev => ({
           ...prev,
@@ -339,9 +370,7 @@ export function AppProvider({ children }) {
         const { token, user } = response.data;
         const completeUser = {
           ...user,
-          identityVerification: normalizeIdentityVerification(
-            payload.identityVerification
-          )
+          identityVerification: identityVerificationFromUser(user, payload.identityVerification)
         };
         setState(prev => ({
           ...prev,
@@ -377,12 +406,7 @@ export function AppProvider({ children }) {
         const completeUser = {
           ...user,
           authProvider: 'google',
-          identityVerification: normalizeIdentityVerification(
-            payload.identityVerification || user.identityVerification || {
-              status: user.kyc_status === 'VERIFIED' ? 'verified' : 'not_started',
-              provider: 'DIDIT'
-            }
-          )
+          identityVerification: identityVerificationFromUser(user, payload.identityVerification)
         };
         setState(prev => ({
           ...prev,
@@ -425,11 +449,12 @@ export function AppProvider({ children }) {
     return { success: true, user: localUser };
   };
 
-  const createBooking = async (booking, payment) => {
+  const createBooking = async (booking) => {
     try {
       // Find numeric vehicle ID if available
       const matchedVehicle = state.vehicles.find(v => v.id === booking.vehicleId || v.vehicle_id === booking.vehicleId);
-      const vehicleId = matchedVehicle?.vehicle_id || 1;
+      const vehicleId = matchedVehicle?.vehicle_id;
+      if (!vehicleId) throw new Error('Selected vehicle is not available in the booking catalog.');
 
       const apiRes = await bookingsApi.createBooking({
         vehicleId,
@@ -437,7 +462,7 @@ export function AppProvider({ children }) {
         returnDate: booking.returnDate,
         pickupLocation: booking.branch,
         returnLocation: booking.returnBranch || booking.branch,
-        paymentMethod: payment?.method || 'UPI',
+        promoCode: booking.promoCode,
         remarks: 'Online portal booking'
       });
 
@@ -447,32 +472,52 @@ export function AppProvider({ children }) {
           ...booking,
           id: `bk-${b.booking_id}`,
           reference: b.booking_reference,
-          status: b.booking_status,
-          total: b.total_amount,
-          invoiceNumber: apiRes.data.invoice?.invoiceNumber
+          status: 'Pending',
+          total: Number(b.total_amount),
+          paymentStatus: 'Pending'
         };
 
         setState(prev => ({
           ...prev,
-          bookings: [newBooking, ...prev.bookings],
-          payments: payment ? [payment, ...prev.payments] : prev.payments
+          bookings: [newBooking, ...prev.bookings]
         }));
         return newBooking;
       }
     } catch (apiErr) {
       console.warn('API Booking note:', apiErr.message);
-      if (apiErr.message.includes('unavailable') || apiErr.message.includes('overlaps')) {
-        throw apiErr;
-      }
+      throw apiErr;
     }
+    throw new Error('Booking could not be saved. Please try again.');
+  };
 
-    // Local fallback creation
-    setState(previous => ({
-      ...previous,
-      bookings: [booking, ...previous.bookings],
-      payments: payment ? [payment, ...previous.payments] : previous.payments
-    }));
-    return booking;
+  const completeBookingPayment = (bookingId, paymentResult) => {
+    setState(previous => {
+      const booking = previous.bookings.find(item => item.id === bookingId);
+      if (!booking) return previous;
+      const paidBooking = {
+        ...booking,
+        status: 'Upcoming',
+        paymentStatus: 'Paid',
+        invoiceNumber: paymentResult.invoiceNumber,
+        transactionReference: paymentResult.transactionReference
+      };
+      const payment = {
+        id: `pay-${paymentResult.transactionReference}`,
+        transaction: paymentResult.transactionReference,
+        booking: booking.reference,
+        customer: previous.user?.name || 'Customer',
+        amount: paymentResult.amount,
+        method: paymentResult.paymentMethod || 'Razorpay',
+        gateway: 'Razorpay Test Mode',
+        status: 'Paid',
+        date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      };
+      return {
+        ...previous,
+        bookings: previous.bookings.map(item => item.id === bookingId ? paidBooking : item),
+        payments: [payment, ...previous.payments]
+      };
+    });
   };
 
   const updateProfile = async (updates) => {
@@ -514,19 +559,10 @@ export function AppProvider({ children }) {
 
   // DIDIT KYC Flow Helper
   const initiateDiditKyc = async () => {
-    try {
-      const response = await kycApi.createSession({
-        callbackUrl: window.location.origin + '/profile?kyc=callback'
-      });
-      return response.data;
-    } catch (err) {
-      console.warn('Didit session creation notice:', err.message);
-      return {
-        sessionId: `didit_sess_local_${Date.now()}`,
-        url: window.location.origin + '/profile?kyc_demo=true',
-        mode: 'sandbox'
-      };
-    }
+    const response = await kycApi.createSession({
+      callbackUrl: window.location.origin + '/profile?kyc=callback'
+    });
+    return response.data;
   };
 
   const verifyDiditKyc = async (verificationData = {}) => {
@@ -651,6 +687,7 @@ export function AppProvider({ children }) {
       googleAuth,
       logout,
       createBooking,
+      completeBookingPayment,
       updateProfile,
       initiateDiditKyc,
       verifyDiditKyc,

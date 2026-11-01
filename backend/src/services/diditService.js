@@ -244,14 +244,10 @@ const diditService = {
       }
     }
 
-    // Direct Portal Interactive Mode (when live API key is not configured)
-    const simulatedSessionId = `didit_sess_${Date.now()}_u${userId}`;
     return {
-      success: true,
-      url: `${redirectUrl}&session_id=${simulatedSessionId}`,
-      session_id: simulatedSessionId,
-      mode: "sandbox",
-      message: "Operating in Direct Portal Verification Mode."
+      success: false,
+      mode: "error",
+      message: "Didit verification is not configured. No verification session was created."
     };
   },
 
@@ -385,15 +381,10 @@ const diditService = {
       }
     }
 
-    // All validation passed
     return {
-      success: true,
-      isVerified: true,
-      decision: "APPROVED",
-      provider: "DIDIT",
-      aadhaarMasked: `XXXX XXXX ${aadhaarCheck.clean.slice(-4)}`,
-      dlMasked: `XXXX XXXX ${dlCheck.clean.slice(-4)}`,
-      verifiedAt: new Date().toISOString()
+      success: false,
+      isVerified: false,
+      message: 'Document format checks cannot verify identity. Complete a hosted Didit session or provider verified document check.'
     };
   },
 
@@ -475,9 +466,7 @@ const diditService = {
    */
   verifyWebhookSignature: (rawBody, signature, timestamp) => {
     const secret = process.env.DIDIT_WEBHOOK_SECRET;
-    if (!secret || isPlaceholderKey(secret)) {
-      return true;
-    }
+    if (!secret || isPlaceholderKey(secret)) return false;
 
     const ts = Number(timestamp);
     if (!ts || Math.abs(Date.now() / 1000 - ts) > 300) {
