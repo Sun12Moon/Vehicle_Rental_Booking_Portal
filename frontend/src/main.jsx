@@ -2225,23 +2225,37 @@ function BookingRow({ b, admin = false }) {
           <StatusBadge>{b.paymentStatus}</StatusBadge>
         </div>
       </div>
-      <Link className="btn secondary small booking-row-action" to={admin ? "/admin/bookings" : "/bookings/" + b.id}>
+      <Link className="btn secondary small booking-row-action" to={admin ? "/admin/bookings/" + encodeURIComponent(b.id) : "/bookings/" + b.id}>
         View details
       </Link>
     </article>
   );
 }
-function BookingDetails() {
+function BookingDetails({ admin = false }) {
   const { bookings, vehicles, customers } = useApp();
-  const { id } = useParams(),
-    b = bookings.find((x) => x.id === id) || bookings[0],
-    v = vehicles.find((x) => x.id === b.vehicleId),
-    c = customers.find((x) => x.id === b.customerId);
+  const { id } = useParams();
+  const b = bookings.find((x) => x.id === id);
+  const v = b && (vehicles.find((x) => x.id === b.vehicleId) || vehicles[0]);
+  const c = b && customers.find((x) => x.id === b.customerId);
   const [agreementOpen, setAgreementOpen] = useState(false);
+  const PageLayout = admin ? AdminLayout : CustomerLayout;
+  if (!b || !v) {
+    return (
+      <PageLayout>
+        <section className={admin ? "admin-page" : "account-page"}>
+          <h1>Booking details unavailable</h1>
+          <p>This booking could not be found in the current account data.</p>
+          <Link className="btn secondary" to={admin ? "/admin/bookings" : "/bookings"}>
+            Back to bookings
+          </Link>
+        </section>
+      </PageLayout>
+    );
+  }
   return (
-    <CustomerLayout>
+    <PageLayout>
       <section className="account-page">
-        <Link to="/bookings" className="back">
+        <Link to={admin ? "/admin/bookings" : "/bookings"} className="back">
           <Icons.ArrowLeft size={16} /> Back to bookings
         </Link>
         <div className="detail-header">
@@ -2260,7 +2274,7 @@ function BookingDetails() {
             <div className="info-list">
               <p>
                 <span>Customer</span>
-                <b>{c?.name || "Guest Customer"}</b>
+                <b>{c?.name || b.customerName || "Customer"}</b>
               </p>
               <p>
                 <span>Pickup / return</span>
@@ -2312,7 +2326,7 @@ function BookingDetails() {
           </Modal>
         )}
       </section>
-    </CustomerLayout>
+    </PageLayout>
   );
 }
 
@@ -2964,10 +2978,10 @@ function AdminBookings() {
                     <b>{b.reference}</b>
                   </td>
                   <td>
-                    {c.name}
-                    <small>{c.email}</small>
+                    {c?.name || b.customerName || "Customer"}
+                    <small>{c?.email || b.customerEmail || ""}</small>
                   </td>
-                  <td>{v.name}</td>
+                  <td>{v?.name || b.vehicleName || "Vehicle"}</td>
                   <td>
                     {b.pickupDate}
                     <small>to {b.returnDate}</small>
@@ -3850,6 +3864,14 @@ function AppRoutes() {
             element={
               <RequireAdmin>
                 <CrudPage type="Customers" />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/bookings/:id"
+            element={
+              <RequireAdmin>
+                <BookingDetails admin />
               </RequireAdmin>
             }
           />

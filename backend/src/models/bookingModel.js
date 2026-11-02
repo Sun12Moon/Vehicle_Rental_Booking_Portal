@@ -1,6 +1,21 @@
 const db = require('../config/db');
 const store = require('./store');
 
+const PENDING_RESERVATION_MINUTES = 15;
+const isBlockingStatus = (booking) => {
+  const status = String(booking.booking_status || '').toUpperCase();
+  if (status === 'CONFIRMED' || status === 'ACTIVE') return true;
+  if (status !== 'PENDING') return false;
+  const createdAt = new Date(booking.booking_date).getTime();
+  return Number.isFinite(createdAt) && createdAt >= Date.now() - PENDING_RESERVATION_MINUTES * 60 * 1000;
+};
+
+const bookingConflictError = () => {
+  const error = new Error('Vehicle is unavailable. Another reservation overlaps with your selected rental dates. Please choose different dates or another vehicle.');
+  error.statusCode = 409;
+  return error;
+};
+
 const bookingModel = {
   /**
    * Concurrency & Availability Validation (FR7)
@@ -14,7 +29,10 @@ const bookingModel = {
         SELECT booking_id, booking_reference, pickup_date, return_date, booking_status
         FROM bookings
         WHERE vehicle_id = ?
-          AND booking_status IN ('CONFIRMED', 'ACTIVE')
+          AND (
+            booking_status IN ('CONFIRMED', 'ACTIVE')
+            OR (booking_status = 'PENDING' AND booking_date >= DATE_SUB(NOW(), INTERVAL ${PENDING_RESERVATION_MINUTES} MINUTE))
+          )
           AND (pickup_date <= ? AND return_date >= ?)
       `;
       const params = [vId, returnDate, pickupDate];
@@ -35,7 +53,7 @@ const bookingModel = {
     // Memory Store Fallback
     const conflicts = store.bookings.filter(b => {
       if (b.vehicle_id !== vId) return false;
-      if (!['CONFIRMED', 'ACTIVE'].includes(b.booking_status)) return false;
+      if (!isBlockingStatus(b)) return false;
       if (excludeBookingId && b.booking_id === Number(excludeBookingId)) return false;
 
       // Overlap: existing.pickup <= requested.return && existing.return >= requested.pickup
@@ -69,31 +87,62 @@ const bookingModel = {
     const bookingReference = `RNT-${Math.floor(100000 + Math.random() * 900000)}`;
 
     if (db.getStatus().isConnected) {
-      const sql = `
-        INSERT INTO bookings (
-          customer_id, vehicle_id, booking_reference, booking_date, pickup_date,
-          return_date, pickup_location, return_location, booking_status,
-          total_days, daily_rent, security_deposit, discount, tax, total_amount,
-          remarks, created_at, updated_at
-        ) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-      `;
-      const res = await db.query(sql, [
-        customerId, vehicleId, bookingReference, pickupDate, returnDate,
-        pickupLocation, returnLocation, bookingStatus, totalDays, dailyRent,
-        securityDeposit, discount, tax, totalAmount, remarks
-      ]);
+      const connection = await db.getPool().getConnection();
+      let bookingId;
+      try {
+        await connection.beginTransaction();
+        // Serialise reservations for this vehicle so two concurrent requests cannot both pass the overlap check.
+        const [vehicles] = await connection.query(
+          'SELECT vehicle_id FROM vehicles WHERE vehicle_id = ? FOR UPDATE',
+          [Number(vehicleId)]
+        );
+        if (!vehicles.length) throw new Error('Selected vehicle was not found.');
 
-      const bookingId = res.insertId;
+        const [conflicts] = await connection.query(
+          `SELECT booking_id FROM bookings
+           WHERE vehicle_id = ?
+             AND (booking_status IN ('CONFIRMED', 'ACTIVE')
+               OR (booking_status = 'PENDING' AND booking_date >= DATE_SUB(NOW(), INTERVAL ${PENDING_RESERVATION_MINUTES} MINUTE)))
+             AND pickup_date <= ? AND return_date >= ?
+           FOR UPDATE`,
+          [Number(vehicleId), returnDate, pickupDate]
+        );
+        if (conflicts.length) throw bookingConflictError();
 
-      // Insert initial history
-      await db.query(
-        `INSERT INTO booking_status_history (booking_id, status, changed_by, changed_at, remarks)
-         VALUES (?, ?, ?, NOW(), ?)`,
-        [bookingId, bookingStatus, customerId, 'Initial booking confirmation']
-      );
-
+        const [result] = await connection.query(
+          `INSERT INTO bookings (
+            customer_id, vehicle_id, booking_reference, booking_date, pickup_date,
+            return_date, pickup_location, return_location, booking_status,
+            total_days, daily_rent, security_deposit, discount, tax, total_amount,
+            remarks, created_at, updated_at
+          ) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [customerId, vehicleId, bookingReference, pickupDate, returnDate,
+            pickupLocation, returnLocation, bookingStatus, totalDays, dailyRent,
+            securityDeposit, discount, tax, totalAmount, remarks]
+        );
+        bookingId = result.insertId;
+        await connection.query(
+          `INSERT INTO booking_status_history (booking_id, status, changed_by, changed_at, remarks)
+           VALUES (?, ?, ?, NOW(), ?)`,
+          [bookingId, bookingStatus, customerId, 'Booking request created; awaiting payment']
+        );
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
       return bookingModel.getBookingById(bookingId);
     }
+
+    const conflictingBooking = store.bookings.some(booking =>
+      booking.vehicle_id === Number(vehicleId) &&
+      isBlockingStatus(booking) &&
+      booking.pickup_date <= returnDate &&
+      booking.return_date >= pickupDate
+    );
+    if (conflictingBooking) throw bookingConflictError();
 
     const newId = store.bookings.length ? Math.max(...store.bookings.map(b => b.booking_id)) + 1 : 1;
     const newBooking = {
